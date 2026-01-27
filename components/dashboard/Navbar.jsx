@@ -12,6 +12,12 @@ import { Space_Grotesk, Inter } from "next/font/google";
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], weight: ["300", "500", "700"] });
 const inter = Inter({ subsets: ["latin"], weight: ["400", "500", "600", "700"] });
 
+function getCookie(name) {
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length === 2) return parts.pop().split(';').shift();
+}
+
 export default function Navbar({ 
   isDark, 
   setIsDark, 
@@ -22,15 +28,33 @@ export default function Navbar({
   const [livestockExpanded, setLivestockExpanded] = useState(true);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState(null);
+
+  const [userName, setUserName] = useState("User");
+  const [userRole, setUserRole] = useState("Role");
+
   const fileInputRef = useRef(null);
   const profileMenuRef = useRef(null);
 
-  // Load profile photo from localStorage on mount
+  // Load user details from backend on mount
   useEffect(() => {
-    const savedPhoto = localStorage.getItem('profilePhoto');
-    if (savedPhoto) {
-      setProfilePhoto(savedPhoto);
-    }
+    const token = getCookie("accessToken");  // <- cookie name
+    if (!token) return;
+
+    fetch("http://localhost:5000/api/user/me", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          setUserName(data.data.name);
+          setUserRole(data.data.role);
+          setProfilePhoto(data.data.profile_photo || null);
+        }
+      })
+      .catch(err => console.log(err));
   }, []);
 
   // Close menu when clicking outside
@@ -44,30 +68,45 @@ export default function Navbar({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handlePhotoUpload = (e) => {
+  const handlePhotoUpload = async (e) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64String = reader.result;
-        setProfilePhoto(base64String);
-        localStorage.setItem('profilePhoto', base64String);
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    const token = getCookie("accessToken");  // <- cookie name
+    if (!token) return;
+
+    const formData = new FormData();
+    formData.append("photo", file);
+
+    try {
+      const res = await fetch("http://localhost:5000/api/user/upload-photo", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setProfilePhoto(data.data.profile_photo);
+      }
+    } catch (err) {
+      console.log(err);
     }
+
     setShowProfileMenu(false);
   };
 
   const handleRemovePhoto = () => {
     setProfilePhoto(null);
-    localStorage.removeItem('profilePhoto');
     setShowProfileMenu(false);
   };
 
   const handleLogout = () => {
-    // Add your logout logic here
-    console.log('Logging out...');
+    localStorage.removeItem("token");
     setShowProfileMenu(false);
+    window.location.href = "/login";
   };
 
   const menuItems = [
@@ -120,7 +159,6 @@ export default function Navbar({
         {/* Logo */}
         <div className={`h-20 flex-shrink-0 flex items-center px-8 border-b ${isDark ? 'border-white/5' : 'border-slate-300'}`}>
           <div className="flex items-center gap-3">
-            
             <img src='/erp-logo.png' alt="ERP Logo" className='w-[100px] h-[100px]' />
           </div>
         </div>
@@ -244,16 +282,6 @@ export default function Navbar({
 
           {/* RIGHT SECTION */}
           <div className="flex items-center gap-6 ml-auto">
-            {/* System Status */}
-            <div className={`hidden xl:flex items-center gap-2 font-mono text-[9px] uppercase tracking-widest px-3 py-1 rounded-full border ${
-              isDark 
-                ? 'bg-green-500/10 border-green-500/20 text-green-600' 
-                : 'bg-white border-slate-300 text-slate-700 shadow-sm font-bold'
-            }`}>
-              <span className="flex h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse"></span> 
-              SYS_ONLINE
-            </div>
-            
             {/* Actions */}
             <div className={`flex items-center gap-3 border-l pl-6 ${
               isDark ? 'border-white/10' : 'border-slate-300'
@@ -281,8 +309,8 @@ export default function Navbar({
             {/* User Profile */}
             <div className="flex items-center gap-3 pl-2 relative" ref={profileMenuRef}>
               <div className="text-right hidden md:block">
-                <p className="text-sm font-bold">Musa</p>
-                <p className="text-[10px] opacity-50 uppercase font-bold tracking-tighter">Manager</p>
+                <p className="text-sm font-bold">{userName}</p>
+                <p className="text-[10px] opacity-50 uppercase font-bold tracking-tighter">{userRole}</p>
               </div>
               <button
                 onClick={() => setShowProfileMenu(!showProfileMenu)}
@@ -293,7 +321,7 @@ export default function Navbar({
                 {profilePhoto ? (
                   <img src={profilePhoto} alt="Profile" className="w-full h-full object-cover" />
                 ) : (
-                  'M'
+                  userName?.charAt(0)?.toUpperCase() || "U"
                 )}
               </button>
 
