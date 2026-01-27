@@ -1,5 +1,7 @@
 "use client";
 import React, { useState } from "react";
+import axios from "axios";
+import Cookies from "js-cookie";
 import Link from "next/link";
 import {
   Eye,
@@ -24,14 +26,58 @@ const Login = () => {
   const { isDark } = useTheme();
   const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState({ email: "", password: "" });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    console.log("AUTHENTICATION_REQUEST:", formData);
+    setError("");
+    setSuccess("");
+    setLoading(true);
+
+    try {
+      const response = await axios.post(
+        "http://localhost:5000/api/auth/login",
+        formData
+      );
+
+      console.log("LOGIN_SUCCESS:", response.data);
+      setSuccess("Login successful! Redirecting...");
+      
+      // Store tokens in cookies
+      if (response.data.accessToken) {
+        Cookies.set("accessToken", response.data.accessToken, {
+          expires: 7,
+          secure: true,
+          sameSite: "Strict"
+        });
+      }
+      
+      if (response.data.refreshToken) {
+        Cookies.set("refreshToken", response.data.refreshToken, {
+          expires: 30,
+          secure: true,
+          sameSite: "Strict"
+        });
+      }
+      
+      // Redirect to home page after 1.5 seconds
+      setTimeout(() => {
+        window.location.href = "/";
+      }, 1500);
+    } catch (error) {
+      const errorMessage = error.response?.data?.message || error.message || "Login failed";
+      console.log("LOGIN_ERROR:", error.response?.data || error.message);
+      setError(errorMessage);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
+    setError("");
   };
 
   const systemMetrics = [
@@ -183,6 +229,18 @@ const Login = () => {
               </p>
             </div>
 
+            {error && (
+              <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded text-red-500 text-sm">
+                {error}
+              </div>
+            )}
+
+            {success && (
+              <div className="mb-4 p-3 bg-green-500/10 border border-green-500/30 rounded text-green-500 text-sm">
+                {success}
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-6">
               
               {/* Email */}
@@ -269,11 +327,12 @@ const Login = () => {
               {/* Submit Button */}
               <button
                 type="submit"
-                className="group w-full bg-green-600 hover:bg-green-500 text-white font-bold py-4 text-[11px] uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 shadow-[0_0_30px_rgba(34,197,94,0.3)] hover:shadow-[0_0_40px_rgba(34,197,94,0.4)] mt-8"
+                disabled={loading}
+                className="group w-full bg-green-600 hover:bg-green-500 disabled:bg-green-700 disabled:opacity-50 text-white font-bold py-4 text-[11px] uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 shadow-[0_0_30px_rgba(34,197,94,0.3)] hover:shadow-[0_0_40px_rgba(34,197,94,0.4)] mt-8"
               >
                 <Shield className="w-4 h-4" />
-                Login
-                <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+                {loading ? "Logging In..." : "Login"}
+                {!loading && <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />}
               </button>
             </form>
 
