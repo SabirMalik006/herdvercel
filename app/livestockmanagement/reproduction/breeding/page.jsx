@@ -15,7 +15,7 @@ const inter = Inter({ subsets: ["latin"], weight: ["400", "500", "600", "700"] }
 
 // API Base URL
 const API_URL = "http://localhost:5000/api/breeding";
-
+  
 export default function BreedingRecords() {
   const [isDark, setIsDark] = useState(false); 
   const [sidebarOpen, setSidebarOpen] = useState(true);
