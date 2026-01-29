@@ -127,7 +127,7 @@ export default function Navbar({
             { name: 'Animals', route: '/livestockmanagement/animal/dashboard' },
             { name: 'Species Management', route: '/livestockmanagement/species' },
             { name: 'Health & Vaccination', route: '/livestockmanagement/health' },
-            { name: 'Reproduction', route: '/livestockmanagement/reproduction' }
+            { name: 'Reproduction', route: '/livestockmanagement/reproduction/dashboard' }
           ]
         },
         { name: 'Milk Records', icon: Milk, route: '/milk-records' },

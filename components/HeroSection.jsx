@@ -53,7 +53,7 @@ export default function Hero() {
           isDark ? "text-white" : "text-white drop-shadow-2xl"
         }`}>
           Revolutionize <br />
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-emerald-600">Your Farm</span>
+          <span className="text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-emerald-600">Your HERD</span>
         </h1>
         <p className={`text-lg md:text-xl max-w-2xl mx-auto mb-8 font-light leading-relaxed ${
           isDark ? "text-neutral-300" : "text-white/90 drop-shadow-lg"

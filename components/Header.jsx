@@ -2,7 +2,7 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation"; // 1. Import usePathname
+import { usePathname } from "next/navigation";
 import { Menu, X, ChevronRight, Moon, Sun } from "lucide-react";
 import { Space_Grotesk, Inter } from "next/font/google";
 import Image from "next/image";
@@ -14,15 +14,27 @@ const inter = Inter({ subsets: ["latin"], weight: ["400", "600"] });
 export default function Header() {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const { isDark, toggleTheme } = useTheme();
   
-  // 2. Get the current route
   const pathname = usePathname();
   const isHomePage = pathname === "/";
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 20);
     window.addEventListener("scroll", handleScroll);
+    
+    // Check if accessToken exists in cookies
+    const checkLoginStatus = () => {
+      const cookies = document.cookie.split(';');
+      const hasAccessToken = cookies.some(cookie => 
+        cookie.trim().startsWith('accessToken=')
+      );
+      setIsLoggedIn(hasAccessToken);
+    };
+    
+    checkLoginStatus();
+    
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
@@ -34,14 +46,11 @@ export default function Header() {
     { name: "Contact", href: "/contact" },
   ];
 
-  // Logic: Only force white text if we are on the Home Page AND at the top.
-  // Everywhere else, follow the theme.
   const isTransparent = isHomePage && !scrolled;
 
   const getTextColor = () => {
     if (isTransparent) return "text-white hover:text-green-400";
     
-    // Standard Theme Colors
     return isDark 
       ? "text-neutral-400 hover:text-green-400" 
       : "text-neutral-600 hover:text-green-600";
@@ -59,7 +68,7 @@ export default function Header() {
         animate={{ y: 0 }}
         className={`fixed top-0 w-full z-[100] transition-all duration-500 ${
           isTransparent
-            ? "h-24 bg-transparent" // Only transparent on Home Page top
+            ? "h-24 bg-transparent"
             : isDark
               ? "h-20 bg-neutral-950/90 backdrop-blur-xl border-b border-white/5"
               : "h-20 bg-white/90 backdrop-blur-xl border-b border-neutral-200"
@@ -116,19 +125,21 @@ export default function Header() {
               {isDark ? <Sun size={20} /> : <Moon size={20} />}
             </button>
             
-            {/* GET STARTED BUTTON */}
-            <Link 
-              href="/signup" 
-              className={`hidden lg:flex items-center gap-2 px-6 py-3 border text-[10px] font-bold tracking-widest uppercase transition-all duration-300 ${
-                isTransparent
-                  ? "border-white/30 text-white hover:bg-white hover:text-black" 
-                  : isDark
-                    ? "border-white/10 text-white hover:bg-white hover:text-black"
-                    : "border-neutral-300 text-black hover:bg-black hover:text-white"
-              }`}
-            >
-              Get Started <ChevronRight className="w-3.5 h-3.5" />
-            </Link>
+            {/* GET STARTED BUTTON - Only show if user is NOT logged in */}
+            {!isLoggedIn && (
+              <Link 
+                href="/signup" 
+                className={`hidden lg:flex items-center gap-2 px-6 py-3 border text-[10px] font-bold tracking-widest uppercase transition-all duration-300 ${
+                  isTransparent
+                    ? "border-white/30 text-white hover:bg-white hover:text-black" 
+                    : isDark
+                      ? "border-white/10 text-white hover:bg-white hover:text-black"
+                      : "border-neutral-300 text-black hover:bg-black hover:text-white"
+                }`}
+              >
+                Get Started <ChevronRight className="w-3.5 h-3.5" />
+              </Link>
+            )}
 
             {/* MOBILE MENU BUTTON */}
             <button 
@@ -141,7 +152,7 @@ export default function Header() {
         </div>
       </motion.header>
 
-      {/* MOBILE MENU (No changes needed here as it always has a solid background) */}
+      {/* MOBILE MENU */}
       <AnimatePresence>
         {menuOpen && (
           <motion.div 
@@ -188,24 +199,27 @@ export default function Header() {
                   </Link>
                 </motion.div>
               ))}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: links.length * 0.1 }}
-                className="mt-8"
-              >
-                <Link
-                  href="/signup"
-                  onClick={() => setMenuOpen(false)}
-                  className={`flex items-center justify-center gap-2 px-8 py-4 border text-sm font-bold tracking-widest uppercase transition-all duration-300 ${
-                    isDark
-                      ? "border-white/10 text-white hover:bg-white hover:text-black"
-                      : "border-neutral-300 text-black hover:bg-black hover:text-white"
-                  }`}
+              {/* Mobile Get Started Button - Only show if user is NOT logged in */}
+              {!isLoggedIn && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: links.length * 0.1 }}
+                  className="mt-8"
                 >
-                  Get Started <ChevronRight className="w-4 h-4" />
-                </Link>
-              </motion.div>
+                  <Link
+                    href="/signup"
+                    onClick={() => setMenuOpen(false)}
+                    className={`flex items-center justify-center gap-2 px-8 py-4 border text-sm font-bold tracking-widest uppercase transition-all duration-300 ${
+                      isDark
+                        ? "border-white/10 text-white hover:bg-white hover:text-black"
+                        : "border-neutral-300 text-black hover:bg-black hover:text-white"
+                    }`}
+                  >
+                    Get Started <ChevronRight className="w-4 h-4" />
+                  </Link>
+                </motion.div>
+              )}
             </div>
           </motion.div>
         )}
