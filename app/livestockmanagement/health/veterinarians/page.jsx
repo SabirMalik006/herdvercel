@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Navbar from '@/components/dashboard/Navbar';
+import axios from 'axios';
 import { 
   Home, Search, Filter, Plus, Eye, Edit, Trash2, ChevronDown, X, Stethoscope
 } from 'lucide-react';
@@ -11,6 +12,9 @@ import { usePathname } from 'next/navigation';
 
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], weight: ["300", "500", "700"] });
 const inter = Inter({ subsets: ["latin"], weight: ["400", "500", "600", "700"] });
+
+// API Base URL
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/health/veterinarians";
 
 export default function VeterinariansManagement() {
   const [isDark, setIsDark] = useState(false); 
@@ -22,6 +26,9 @@ export default function VeterinariansManagement() {
   const [editingVet, setEditingVet] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [viewingVet, setViewingVet] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [specializations, setSpecializations] = useState(['general', 'surgery', 'reproduction', 'nutrition', 'emergency']);
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
@@ -30,34 +37,88 @@ export default function VeterinariansManagement() {
   });
   const pathname = usePathname();
 
-  // --- VETERINARIANS DATA WITH STORAGE ---
-  const [veterinarians, setVeterinarians] = useState(() => {
-    // Load from storage on mount
+  // --- VETERINARIANS DATA ---
+  const [veterinarians, setVeterinarians] = useState([]);
+
+  // Fetch Veterinarians from API
+  const fetchVeterinarians = async () => {
+    try {
+      setLoading(true);
+      const response = await axios.get(API_URL);
+      
+      if (response.data && response.data.success && Array.isArray(response.data.data)) {
+        setVeterinarians(response.data.data);
+        // Save to localStorage as backup
+        localStorage.setItem('livestockVeterinarians', JSON.stringify(response.data.data));
+      } else if (response.data && Array.isArray(response.data)) {
+        setVeterinarians(response.data);
+        localStorage.setItem('livestockVeterinarians', JSON.stringify(response.data));
+      } else {
+        console.warn("Unexpected API response format:", response.data);
+        // Fallback to localStorage
+        loadFromLocalStorage();
+      }
+    } catch (error) {
+      console.error("Error fetching veterinarians:", error);
+      // Fallback to localStorage
+      loadFromLocalStorage();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch Specializations from API - with error handling
+  // const fetchSpecializations = async () => {
+  //   try {
+  //     const response = await axios.get(`${API_URL}/specializations`);
+  //     if (response.data && response.data.success && Array.isArray(response.data.data)) {
+  //       const specs = response.data.data;
+  //       if (specs.length > 0) {
+  //         setSpecializations(specs);
+  //       }
+  //     }
+  //   } catch (error) {
+  //     console.error("Error fetching specializations, using defaults:", error);
+  //     // Keep default specializations - no need to set, already have defaults
+  //   }
+  // };
+
+  // Load from localStorage as fallback
+  const loadFromLocalStorage = () => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('livestockVeterinarians');
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
-          return parsed.length > 0 ? parsed : [];
+          setVeterinarians(parsed.length > 0 ? parsed : []);
         } catch (e) {
           console.error('Error parsing stored veterinarians:', e);
+          setVeterinarians([]);
         }
+      } else {
+        setVeterinarians([]);
       }
     }
-    return [];
-  });
+  };
 
-  // Save to storage whenever veterinarians change
-  React.useEffect(() => {
-    if (typeof window !== 'undefined') {
+  // Initial data fetch
+  useEffect(() => {
+    fetchVeterinarians();
+    // fetchSpecializations();
+  }, []);
+
+  // Save to localStorage whenever veterinarians change (backup)
+  useEffect(() => {
+    if (veterinarians.length > 0 && typeof window !== 'undefined') {
       localStorage.setItem('livestockVeterinarians', JSON.stringify(veterinarians));
     }
   }, [veterinarians]);
 
   const filteredVeterinarians = veterinarians.filter(vet => {
-    const matchesSearch = vet.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          vet.phone.includes(searchTerm) ||
-                          vet.address.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = 
+      (vet.name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+      (vet.phone?.toString() || '').includes(searchTerm) ||
+      (vet.address?.toLowerCase() || '').includes(searchTerm.toLowerCase());
     const matchesSpecialization = selectedSpecialization === 'all' || vet.specialization === selectedSpecialization;
     return matchesSearch && matchesSpecialization;
   });
@@ -67,10 +128,10 @@ export default function VeterinariansManagement() {
     if (vet) {
       setEditingVet(vet);
       setFormData({
-        name: vet.name,
-        phone: vet.phone,
-        address: vet.address,
-        specialization: vet.specialization
+        name: vet.name || '',
+        phone: vet.phone || '',
+        address: vet.address || '',
+        specialization: vet.specialization || 'general'
       });
     } else {
       setEditingVet(null);
@@ -95,41 +156,96 @@ export default function VeterinariansManagement() {
     });
   };
 
-  const handleSubmit = (e) => {
+  // Submit Handler - API Integration
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (editingVet) {
-      // Update existing veterinarian
-      setVeterinarians(veterinarians.map(vet => 
-        vet.id === editingVet.id 
-          ? { 
-              ...vet, 
-              name: formData.name, 
-              phone: formData.phone,
-              address: formData.address,
-              specialization: formData.specialization
-            }
-          : vet
-      ));
-    } else {
-      // Add new veterinarian
+    if (!formData.name || !formData.phone || !formData.address || !formData.specialization) {
+      return;
+    }
+    
+    setSubmitting(true);
+    
+    try {
+      if (editingVet) {
+        // Update existing veterinarian
+        const response = await axios.patch(`${API_URL}/${editingVet.id || editingVet._id}`, formData);
+        
+        if (response.data && response.data.success) {
+          await fetchVeterinarians();
+        }
+      } else {
+        // Add new veterinarian
+        const response = await axios.post(API_URL, formData);
+        
+        if (response.data && response.data.success) {
+          await fetchVeterinarians();
+        }
+      }
+      
+      handleCloseForm();
+      
+      // ✅ FIX: Clear search and filter when adding new record
+      setSearchTerm('');
+      setSelectedSpecialization('all');
+      
+    } catch (error) {
+      console.error("API Error, saving locally:", error);
+      
+      // Fallback to localStorage if API fails
       const newVet = {
-        id: veterinarians.length > 0 ? Math.max(...veterinarians.map(v => v.id)) + 1 : 1,
+        id: editingVet ? (editingVet.id || editingVet._id) : Date.now(),
         name: formData.name,
         phone: formData.phone,
         address: formData.address,
         specialization: formData.specialization,
-        createdDate: new Date().toISOString().slice(0, 19).replace('T', ' ')
+        createdDate: new Date().toISOString().slice(0, 19).replace('T', ' '),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       };
-      setVeterinarians([newVet, ...veterinarians]);
+      
+      let updatedRecords;
+      if (editingVet) {
+        updatedRecords = veterinarians.map(vet => 
+          (vet.id || vet._id) === (editingVet.id || editingVet._id) ? newVet : vet
+        );
+      } else {
+        updatedRecords = [newVet, ...veterinarians];
+      }
+      
+      setVeterinarians(updatedRecords);
+      localStorage.setItem('livestockVeterinarians', JSON.stringify(updatedRecords));
+      handleCloseForm();
+      
+      // ✅ FIX: Clear search and filter when adding new record (even on error)
+      setSearchTerm('');
+      setSelectedSpecialization('all');
+      
+    } finally {
+      setSubmitting(false);
     }
-    
-    handleCloseForm();
   };
 
-  const handleDelete = (id) => {
-    setVeterinarians(veterinarians.filter(vet => vet.id !== id));
+  // Delete Handler - API Integration
+  const handleDelete = async (id) => {
+    try {
+      await axios.delete(`${API_URL}/${id}`);
+      await fetchVeterinarians();
+    } catch (error) {
+      console.error("Delete failed, deleting locally:", error);
+      const updatedRecords = veterinarians.filter(vet => 
+        (vet.id || vet._id) !== id
+      );
+      setVeterinarians(updatedRecords);
+      localStorage.setItem('livestockVeterinarians', JSON.stringify(updatedRecords));
+    }
     setDeleteConfirm(null);
+  };
+
+  // ✅ FIX: Clear search function
+  const handleClearSearch = () => {
+    setSearchTerm('');
+    setSelectedSpecialization('all');
   };
 
   const CornerBrackets = () => {
@@ -209,6 +325,9 @@ export default function VeterinariansManagement() {
               <p className={`text-sm font-light leading-relaxed ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
                 Manage your network of veterinarians and animal health professionals.
               </p>
+              {loading && (
+                <span className="text-xs text-green-500 font-mono mt-2">SYNCING_DATA...</span>
+              )}
             </div>
             
             {/* Enhanced Tab Navigation */}
@@ -295,10 +414,13 @@ export default function VeterinariansManagement() {
                     ? 'bg-green-600 hover:bg-green-700 text-white border-green-600 hover:border-green-700' 
                     : 'bg-green-600 hover:bg-green-700 text-white border-green-600 shadow-sm'
                 }`}
-                onClick={() => handleOpenForm()}
+                onClick={() => {
+                  handleOpenForm();
+                }}
+                disabled={submitting}
               >
                 <Plus className="w-4 h-4" />
-                Add Veterinarian
+                {submitting ? 'Saving...' : 'Add Veterinarian'}
               </button>
             </div>
           </section>
@@ -321,6 +443,16 @@ export default function VeterinariansManagement() {
                       isDark ? 'placeholder:text-neutral-600' : 'placeholder:text-neutral-400'
                     }`}
                   />
+                  {searchTerm && (
+                    <button
+                      onClick={handleClearSearch}
+                      className={`p-1 transition-all ${
+                        isDark ? 'hover:text-white text-neutral-400' : 'hover:text-neutral-900 text-neutral-500'
+                      }`}
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
                 <div className={`absolute bottom-0 left-0 h-[2px] w-0 group-hover/search:w-full transition-all duration-500 ${
                   isDark ? 'bg-green-500' : 'bg-green-600'
@@ -336,7 +468,9 @@ export default function VeterinariansManagement() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Filter className={`w-4 h-4 ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`} />
-                      <span className="text-[11px] font-bold uppercase tracking-wider">Filter by specialization</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider">
+                        {selectedSpecialization === 'all' ? 'Filter by specialization' : selectedSpecialization.charAt(0).toUpperCase() + selectedSpecialization.slice(1)}
+                      </span>
                     </div>
                     <ChevronDown className={`w-4 h-4 transition-transform ${filterOpen ? 'rotate-180' : ''}`} />
                   </div>
@@ -347,7 +481,24 @@ export default function VeterinariansManagement() {
                   <div className={`absolute top-full mt-2 right-0 w-full border shadow-xl overflow-hidden z-20 backdrop-blur-md ${
                     isDark ? 'bg-neutral-900/95 border-white/10' : 'bg-white/95 border-neutral-200'
                   }`}>
-                    {['all', 'general', 'surgery', 'reproduction', 'nutrition', 'emergency'].map((spec) => (
+                    <button
+                      onClick={() => {
+                        setSelectedSpecialization('all');
+                        setFilterOpen(false);
+                      }}
+                      className={`cursor-pointer w-full px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider transition-colors ${
+                        selectedSpecialization === 'all'
+                          ? isDark
+                            ? 'bg-green-500/10 text-green-400 border-l-2 border-green-400'
+                            : 'bg-green-50 text-green-700 border-l-2 border-green-600'
+                          : isDark
+                          ? 'hover:bg-white/5'
+                          : 'hover:bg-neutral-50'
+                      }`}
+                    >
+                      All Specializations
+                    </button>
+                    {specializations.map((spec) => (
                       <button
                         key={spec}
                         onClick={() => {
@@ -382,108 +533,136 @@ export default function VeterinariansManagement() {
               }`}>
                 All Veterinarians
               </h2>
+              <button
+                onClick={() => {
+                  fetchVeterinarians();
+                  fetchSpecializations();
+                }}
+                disabled={loading}
+                className={`ml-auto text-xs font-mono px-3 py-1 border transition-all ${
+                  loading 
+                    ? 'opacity-50 cursor-not-allowed' 
+                    : isDark 
+                      ? 'hover:bg-white/5 border-white/10 hover:border-green-500/20' 
+                      : 'hover:bg-neutral-50 border-neutral-200 hover:border-green-300'
+                }`}
+              >
+                {loading ? 'REFRESHING...' : 'REFRESH'}
+              </button>
             </div>
             
-            <div className="grid grid-cols-1 gap-4">
-              {filteredVeterinarians.map((vet) => (
-                <div key={vet.id} className={`relative p-6 border transition-all duration-300 hover:-translate-y-1 ${
-                  isDark ? 'bg-neutral-900/50 border-white/5 hover:border-green-500/20' : 'bg-white border-neutral-300 hover:border-green-500/30 shadow-sm'
-                }`}>
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                    {/* Name */}
-                    <div className="md:col-span-3">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Name
-                      </span>
-                      <h3 className={`text-lg font-bold ${spaceGrotesk.className}`}>{vet.name}</h3>
-                    </div>
+            {loading && veterinarians.length === 0 ? (
+              <div className={`relative p-16 border text-center ${
+                isDark ? 'bg-neutral-900/50 border-white/5' : 'bg-white border-neutral-300 shadow-sm'
+              }`}>
+                <div className="animate-spin w-12 h-12 border-3 border-green-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+                <h3 className={`${spaceGrotesk.className} text-2xl font-bold mb-2 uppercase tracking-tight`}>
+                  Loading veterinarians...
+                </h3>
+                <CornerBrackets />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4">
+                {filteredVeterinarians.map((vet) => (
+                  <div key={vet.id || vet._id || Math.random()} className={`relative p-6 border transition-all duration-300 hover:-translate-y-1 ${
+                    isDark ? 'bg-neutral-900/50 border-white/5 hover:border-green-500/20' : 'bg-white border-neutral-300 hover:border-green-500/30 shadow-sm'
+                  }`}>
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                      {/* Name */}
+                      <div className="md:col-span-3">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Name
+                        </span>
+                        <h3 className={`text-lg font-bold ${spaceGrotesk.className}`}>{vet.name}</h3>
+                      </div>
 
-                    {/* Phone */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Phone
-                      </span>
-                      <p className={`text-sm font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                        {vet.phone}
-                      </p>
-                    </div>
+                      {/* Phone */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Phone
+                        </span>
+                        <p className={`text-sm font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                          {vet.phone}
+                        </p>
+                      </div>
 
-                    {/* Address */}
-                    <div className="md:col-span-3">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Address
-                      </span>
-                      <p className={`text-sm font-medium truncate ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
-                        {vet.address}
-                      </p>
-                    </div>
+                      {/* Address */}
+                      <div className="md:col-span-3">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Address
+                        </span>
+                        <p className={`text-sm font-medium truncate ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
+                          {vet.address}
+                        </p>
+                      </div>
 
-                    {/* Specialization */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Specialization
-                      </span>
-                      <span className={`inline-flex items-center px-3 py-1 border text-[10px] font-bold font-mono uppercase tracking-wider ${
-                        isDark
-                          ? 'bg-green-500/10 text-green-400 border-green-500/20'
-                          : 'bg-green-50 text-green-700 border-green-200'
-                      }`}>
-                        {vet.specialization}
-                      </span>
-                    </div>
+                      {/* Specialization */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Specialization
+                        </span>
+                        <span className={`inline-flex items-center px-3 py-1 border text-[10px] font-bold font-mono uppercase tracking-wider ${
+                          isDark
+                            ? 'bg-green-500/10 text-green-400 border-green-500/20'
+                            : 'bg-green-50 text-green-700 border-green-200'
+                        }`}>
+                          {vet.specialization}
+                        </span>
+                      </div>
 
-                    {/* Actions */}
-                    <div className="md:col-span-2 flex items-center justify-end gap-1">
-                      <button 
-                        className={`cursor-pointer p-2.5 border transition-all ${
-                          isDark 
-                            ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
-                            : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
-                        }`} 
-                        title="View"
-                        onClick={() => setViewingVet(vet)}
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
-                      <button 
-                        className={`cursor-pointer p-2.5 border transition-all ${
-                          isDark 
-                            ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
-                            : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
-                        }`} 
-                        title="Edit"
-                        onClick={() => handleOpenForm(vet)}
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button 
-                        className={`cursor-pointer p-2.5 border transition-all ${
-                          isDark 
-                            ? 'hover:bg-red-500/20 text-red-400 border-white/10 hover:border-red-500/20' 
-                            : 'hover:bg-red-50 text-red-600 border-neutral-200 hover:border-red-200'
-                        }`} 
-                        title="Delete"
-                        onClick={() => setDeleteConfirm(vet)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {/* Actions */}
+                      <div className="md:col-span-2 flex items-center justify-end gap-1">
+                        <button 
+                          className={`cursor-pointer p-2.5 border transition-all ${
+                            isDark 
+                              ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
+                              : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
+                          }`} 
+                          title="View"
+                          onClick={() => setViewingVet(vet)}
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button 
+                          className={`cursor-pointer p-2.5 border transition-all ${
+                            isDark 
+                              ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
+                              : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
+                          }`} 
+                          title="Edit"
+                          onClick={() => handleOpenForm(vet)}
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button 
+                          className={`cursor-pointer p-2.5 border transition-all ${
+                            isDark 
+                              ? 'hover:bg-red-500/20 text-red-400 border-white/10 hover:border-red-500/20' 
+                              : 'hover:bg-red-50 text-red-600 border-neutral-200 hover:border-red-200'
+                          }`} 
+                          title="Delete"
+                          onClick={() => setDeleteConfirm(vet)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
+                    <CornerBrackets />
                   </div>
-                  <CornerBrackets />
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
 
             {/* Empty State */}
-            {filteredVeterinarians.length === 0 && (
+            {!loading && filteredVeterinarians.length === 0 && (
               <div className={`relative p-16 border text-center ${
                 isDark ? 'bg-neutral-900/50 border-white/5' : 'bg-white border-neutral-300 shadow-sm'
               }`}>
@@ -492,8 +671,22 @@ export default function VeterinariansManagement() {
                   No veterinarians found
                 </h3>
                 <p className={`text-sm font-medium ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-                  Try adjusting your search or filter criteria
+                  {searchTerm || selectedSpecialization !== 'all' 
+                    ? 'Try adjusting your search or filter criteria' 
+                    : 'Click "Add Veterinarian" to create your first record'}
                 </p>
+                {(searchTerm || selectedSpecialization !== 'all') && (
+                  <button
+                    onClick={handleClearSearch}
+                    className={`mt-4 px-4 py-2 border text-xs font-bold uppercase tracking-wider transition-all ${
+                      isDark 
+                        ? 'bg-neutral-800 hover:bg-neutral-700 border-white/10 hover:border-white/20' 
+                        : 'bg-white hover:bg-neutral-50 border-neutral-300 hover:border-neutral-400'
+                    }`}
+                  >
+                    Clear Filters
+                  </button>
+                )}
                 <CornerBrackets />
               </div>
             )}
@@ -534,6 +727,7 @@ export default function VeterinariansManagement() {
                   ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
                   : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
               }`}
+              disabled={submitting}
             >
               <X className="w-5 h-5" />
             </button>
@@ -559,6 +753,7 @@ export default function VeterinariansManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -580,6 +775,7 @@ export default function VeterinariansManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -601,6 +797,7 @@ export default function VeterinariansManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -619,12 +816,13 @@ export default function VeterinariansManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500'
                 }`}
+                disabled={submitting}
               >
-                <option value="general">General</option>
-                <option value="surgery">Surgery</option>
-                <option value="reproduction">Reproduction</option>
-                <option value="nutrition">Nutrition</option>
-                <option value="emergency">Emergency</option>
+                {specializations.map(spec => (
+                  <option key={spec} value={spec}>
+                    {spec.charAt(0).toUpperCase() + spec.slice(1)}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -638,14 +836,20 @@ export default function VeterinariansManagement() {
                     ? 'bg-neutral-800 hover:bg-neutral-700 border-neutral-700' 
                     : 'bg-white hover:bg-neutral-50 border-neutral-300'
                 }`}
+                disabled={submitting}
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="cursor-pointer flex-1 px-6 py-3.5 border font-bold text-[11px] uppercase tracking-widest bg-green-600 hover:bg-green-700 text-white border-green-600 transition-all"
+                disabled={submitting}
+                className={`cursor-pointer flex-1 px-6 py-3.5 border font-bold text-[11px] uppercase tracking-widest transition-all ${
+                  submitting
+                    ? 'bg-green-400 cursor-not-allowed'
+                    : 'bg-green-600 hover:bg-green-700'
+                } text-white border-green-600`}
               >
-                {editingVet ? 'Update' : 'Add'}
+                {submitting ? 'Saving...' : editingVet ? 'Update' : 'Add'}
               </button>
             </div>
           </form>
@@ -682,7 +886,7 @@ export default function VeterinariansManagement() {
                   Cancel
                 </button>
                 <button
-                  onClick={() => handleDelete(deleteConfirm.id)}
+                  onClick={() => handleDelete(deleteConfirm.id || deleteConfirm._id)}
                   className="cursor-pointer flex-1 px-6 py-3.5 border font-bold text-[11px] uppercase tracking-widest bg-red-600 hover:bg-red-700 text-white border-red-600 transition-all"
                 >
                   Delete
@@ -783,7 +987,9 @@ export default function VeterinariansManagement() {
                   }`}>
                     Added Date
                   </label>
-                  <p className="text-sm font-medium">{viewingVet.createdDate}</p>
+                  <p className="text-sm font-medium">
+                    {viewingVet.createdDate || (viewingVet.createdAt ? new Date(viewingVet.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A')}
+                  </p>
                 </div>
               </div>
 

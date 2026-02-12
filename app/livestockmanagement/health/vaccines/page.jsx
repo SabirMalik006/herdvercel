@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Navbar from '@/components/dashboard/Navbar';
+import axios from 'axios';
 import { 
   Home, Search, Filter, Plus, Eye, Edit, Trash2, ChevronDown, X, Syringe
 } from 'lucide-react';
@@ -11,6 +12,9 @@ import { usePathname } from 'next/navigation';
 
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], weight: ["300", "500", "700"] });
 const inter = Inter({ subsets: ["latin"], weight: ["400", "500", "600", "700"] });
+
+// API Base URL
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/health/vaccines";
 
 export default function VaccinesManagement() {
   const [isDark, setIsDark] = useState(false); 
@@ -22,6 +26,9 @@ export default function VaccinesManagement() {
   const [editingVaccine, setEditingVaccine] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [viewingVaccine, setViewingVaccine] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [rotations, setRotations] = useState(['1', '2', '3', '4', '5', '6']);
   const [formData, setFormData] = useState({
     name: '',
     rotation: '',
@@ -30,33 +37,88 @@ export default function VaccinesManagement() {
   });
   const pathname = usePathname();
 
-  // --- VACCINES DATA WITH STORAGE ---
-  const [vaccines, setVaccines] = useState(() => {
-    // Load from storage on mount
+  // --- VACCINES DATA ---
+  const [vaccines, setVaccines] = useState([]);
+
+  // Fetch Vaccines from API
+  const fetchVaccines = async () => {
+    try {
+      setLoading(true);
+      const response = await axios.get(API_URL);
+      
+      if (response.data && response.data.success && Array.isArray(response.data.data)) {
+        setVaccines(response.data.data);
+        // Save to localStorage as backup
+        localStorage.setItem('livestockVaccines', JSON.stringify(response.data.data));
+      } else if (response.data && Array.isArray(response.data)) {
+        setVaccines(response.data);
+        localStorage.setItem('livestockVaccines', JSON.stringify(response.data));
+      } else {
+        console.warn("Unexpected API response format:", response.data);
+        // Fallback to localStorage
+        loadFromLocalStorage();
+      }
+    } catch (error) {
+      console.error("Error fetching vaccines:", error);
+      // Fallback to localStorage
+      loadFromLocalStorage();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch Rotations from API
+  // const fetchRotations = async () => {
+  //   try {
+  //     const response = await axios.get(`${API_URL}/rotations`);
+  //     if (response.data && response.data.success && Array.isArray(response.data.data)) {
+  //       const rot = response.data.data;
+  //       if (rot.length > 0) {
+  //         // Convert numbers to strings for comparison
+  //         setRotations(rot.map(r => r.toString()).sort());
+  //       }
+  //     }
+  //   } catch (error) {
+  //     console.error("Error fetching rotations, using defaults:", error);
+  //     // Keep default rotations
+  //   }
+  // };
+
+  // Load from localStorage as fallback
+  const loadFromLocalStorage = () => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('livestockVaccines');
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
-          return parsed.length > 0 ? parsed : [];
+          setVaccines(parsed.length > 0 ? parsed : []);
         } catch (e) {
           console.error('Error parsing stored vaccines:', e);
+          setVaccines([]);
         }
+      } else {
+        setVaccines([]);
       }
     }
-    return [];
-  });
+  };
 
-  // Save to storage whenever vaccines change
-  React.useEffect(() => {
-    if (typeof window !== 'undefined') {
+  // Initial data fetch
+  useEffect(() => {
+    fetchVaccines();
+    // fetchRotations();
+  }, []);
+
+  // Save to localStorage whenever vaccines change (backup)
+  useEffect(() => {
+    if (vaccines.length > 0 && typeof window !== 'undefined') {
       localStorage.setItem('livestockVaccines', JSON.stringify(vaccines));
     }
   }, [vaccines]);
 
   const filteredVaccines = vaccines.filter(vaccine => {
-    const matchesSearch = vaccine.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          vaccine.description.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = 
+      (vaccine.name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+      (vaccine.description?.toLowerCase() || '').includes(searchTerm.toLowerCase());
     const matchesRotation = selectedRotation === 'all' || vaccine.rotation === parseInt(selectedRotation);
     return matchesSearch && matchesRotation;
   });
@@ -66,10 +128,10 @@ export default function VaccinesManagement() {
     if (vaccine) {
       setEditingVaccine(vaccine);
       setFormData({
-        name: vaccine.name,
-        rotation: vaccine.rotation.toString(),
-        interval: vaccine.interval,
-        description: vaccine.description
+        name: vaccine.name || '',
+        rotation: vaccine.rotation?.toString() || '',
+        interval: vaccine.interval || '',
+        description: vaccine.description || ''
       });
     } else {
       setEditingVaccine(null);
@@ -94,41 +156,102 @@ export default function VaccinesManagement() {
     });
   };
 
-  const handleSubmit = (e) => {
+  // Submit Handler - API Integration
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (editingVaccine) {
-      // Update existing vaccine
-      setVaccines(vaccines.map(vaccine => 
-        vaccine.id === editingVaccine.id 
-          ? { 
-              ...vaccine, 
-              name: formData.name, 
-              rotation: parseInt(formData.rotation),
-              interval: formData.interval,
-              description: formData.description
-            }
-          : vaccine
-      ));
-    } else {
-      // Add new vaccine
+    if (!formData.name || !formData.rotation || !formData.interval || !formData.description) {
+      return;
+    }
+    
+    setSubmitting(true);
+    
+    try {
+      if (editingVaccine) {
+        // Update existing vaccine
+        const response = await axios.patch(`${API_URL}/${editingVaccine.id || editingVaccine._id}`, {
+          ...formData,
+          rotation: parseInt(formData.rotation)
+        });
+        
+        if (response.data && response.data.success) {
+          await fetchVaccines();
+        }
+      } else {
+        // Add new vaccine
+        const response = await axios.post(API_URL, {
+          ...formData,
+          rotation: parseInt(formData.rotation)
+        });
+        
+        if (response.data && response.data.success) {
+          await fetchVaccines();
+        }
+      }
+      
+      handleCloseForm();
+      
+      // Clear search and filter when adding new record
+      setSearchTerm('');
+      setSelectedRotation('all');
+      
+    } catch (error) {
+      console.error("API Error, saving locally:", error);
+      
+      // Fallback to localStorage if API fails
       const newVaccine = {
-        id: vaccines.length > 0 ? Math.max(...vaccines.map(v => v.id)) + 1 : 1,
+        id: editingVaccine ? (editingVaccine.id || editingVaccine._id) : Date.now(),
         name: formData.name,
         rotation: parseInt(formData.rotation),
         interval: formData.interval,
         description: formData.description,
-        createdDate: new Date().toISOString().slice(0, 19).replace('T', ' ')
+        createdDate: new Date().toISOString().slice(0, 19).replace('T', ' '),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       };
-      setVaccines([newVaccine, ...vaccines]);
+      
+      let updatedRecords;
+      if (editingVaccine) {
+        updatedRecords = vaccines.map(vaccine => 
+          (vaccine.id || vaccine._id) === (editingVaccine.id || editingVaccine._id) ? newVaccine : vaccine
+        );
+      } else {
+        updatedRecords = [newVaccine, ...vaccines];
+      }
+      
+      setVaccines(updatedRecords);
+      localStorage.setItem('livestockVaccines', JSON.stringify(updatedRecords));
+      handleCloseForm();
+      
+      // Clear search and filter when adding new record (even on error)
+      setSearchTerm('');
+      setSelectedRotation('all');
+      
+    } finally {
+      setSubmitting(false);
     }
-    
-    handleCloseForm();
   };
 
-  const handleDelete = (id) => {
-    setVaccines(vaccines.filter(vaccine => vaccine.id !== id));
+  // Delete Handler - API Integration
+  const handleDelete = async (id) => {
+    try {
+      await axios.delete(`${API_URL}/${id}`);
+      await fetchVaccines();
+    } catch (error) {
+      console.error("Delete failed, deleting locally:", error);
+      const updatedRecords = vaccines.filter(vaccine => 
+        (vaccine.id || vaccine._id) !== id
+      );
+      setVaccines(updatedRecords);
+      localStorage.setItem('livestockVaccines', JSON.stringify(updatedRecords));
+    }
     setDeleteConfirm(null);
+  };
+
+  // Clear search function
+  const handleClearSearch = () => {
+    setSearchTerm('');
+    setSelectedRotation('all');
   };
 
   const CornerBrackets = () => {
@@ -208,6 +331,9 @@ export default function VaccinesManagement() {
               <p className={`text-sm font-light leading-relaxed ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
                 Manage available vaccines, dosage schedules, and administration protocols.
               </p>
+              {loading && (
+                <span className="text-xs text-green-500 font-mono mt-2">SYNCING_DATA...</span>
+              )}
             </div>
             
             {/* Enhanced Tab Navigation */}
@@ -295,9 +421,10 @@ export default function VaccinesManagement() {
                     : 'bg-green-600 hover:bg-green-700 text-white border-green-600 shadow-sm'
                 }`}
                 onClick={() => handleOpenForm()}
+                disabled={submitting}
               >
                 <Plus className="w-4 h-4" />
-                Add Vaccine
+                {submitting ? 'Saving...' : 'Add Vaccine'}
               </button>
             </div>
           </section>
@@ -320,6 +447,16 @@ export default function VaccinesManagement() {
                       isDark ? 'placeholder:text-neutral-600' : 'placeholder:text-neutral-400'
                     }`}
                   />
+                  {searchTerm && (
+                    <button
+                      onClick={handleClearSearch}
+                      className={`p-1 transition-all ${
+                        isDark ? 'hover:text-white text-neutral-400' : 'hover:text-neutral-900 text-neutral-500'
+                      }`}
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
                 <div className={`absolute bottom-0 left-0 h-[2px] w-0 group-hover/search:w-full transition-all duration-500 ${
                   isDark ? 'bg-green-500' : 'bg-green-600'
@@ -335,7 +472,9 @@ export default function VaccinesManagement() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Filter className={`w-4 h-4 ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`} />
-                      <span className="text-[11px] font-bold uppercase tracking-wider">Filter by rotation</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider">
+                        {selectedRotation === 'all' ? 'Filter by rotation' : `${selectedRotation} Doses`}
+                      </span>
                     </div>
                     <ChevronDown className={`w-4 h-4 transition-transform ${filterOpen ? 'rotate-180' : ''}`} />
                   </div>
@@ -346,7 +485,24 @@ export default function VaccinesManagement() {
                   <div className={`absolute top-full mt-2 right-0 w-full border shadow-xl overflow-hidden z-20 backdrop-blur-md ${
                     isDark ? 'bg-neutral-900/95 border-white/10' : 'bg-white/95 border-neutral-200'
                   }`}>
-                    {['all', '1', '2', '3', '4', '5', '6'].map((rotation) => (
+                    <button
+                      onClick={() => {
+                        setSelectedRotation('all');
+                        setFilterOpen(false);
+                      }}
+                      className={`cursor-pointer w-full px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider transition-colors ${
+                        selectedRotation === 'all'
+                          ? isDark
+                            ? 'bg-green-500/10 text-green-400 border-l-2 border-green-400'
+                            : 'bg-green-50 text-green-700 border-l-2 border-green-600'
+                          : isDark
+                          ? 'hover:bg-white/5'
+                          : 'hover:bg-neutral-50'
+                      }`}
+                    >
+                      All Rotations
+                    </button>
+                    {rotations.map((rotation) => (
                       <button
                         key={rotation}
                         onClick={() => {
@@ -363,7 +519,7 @@ export default function VaccinesManagement() {
                             : 'hover:bg-neutral-50'
                         }`}
                       >
-                        {rotation === 'all' ? 'All Rotations' : `${rotation} Doses`}
+                        {rotation} {parseInt(rotation) === 1 ? 'Dose' : 'Doses'}
                       </button>
                     ))}
                   </div>
@@ -381,106 +537,134 @@ export default function VaccinesManagement() {
               }`}>
                 All Vaccines
               </h2>
+              <button
+                onClick={() => {
+                  fetchVaccines();
+                  // fetchRotations();
+                }}
+                disabled={loading}
+                className={`ml-auto text-xs font-mono px-3 py-1 border transition-all ${
+                  loading 
+                    ? 'opacity-50 cursor-not-allowed' 
+                    : isDark 
+                      ? 'hover:bg-white/5 border-white/10 hover:border-green-500/20' 
+                      : 'hover:bg-neutral-50 border-neutral-200 hover:border-green-300'
+                }`}
+              >
+                {loading ? 'REFRESHING...' : 'REFRESH'}
+              </button>
             </div>
             
-            <div className="grid grid-cols-1 gap-4">
-              {filteredVaccines.map((vaccine) => (
-                <div key={vaccine.id} className={`relative p-6 border transition-all duration-300 hover:-translate-y-1 ${
-                  isDark ? 'bg-neutral-900/50 border-white/5 hover:border-green-500/20' : 'bg-white border-neutral-300 hover:border-green-500/30 shadow-sm'
-                }`}>
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                    {/* Name */}
-                    <div className="md:col-span-3">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Name
-                      </span>
-                      <h3 className={`text-lg font-bold ${spaceGrotesk.className}`}>{vaccine.name}</h3>
-                    </div>
+            {loading && vaccines.length === 0 ? (
+              <div className={`relative p-16 border text-center ${
+                isDark ? 'bg-neutral-900/50 border-white/5' : 'bg-white border-neutral-300 shadow-sm'
+              }`}>
+                <div className="animate-spin w-12 h-12 border-3 border-green-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+                <h3 className={`${spaceGrotesk.className} text-2xl font-bold mb-2 uppercase tracking-tight`}>
+                  Loading vaccines...
+                </h3>
+                <CornerBrackets />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4">
+                {filteredVaccines.map((vaccine) => (
+                  <div key={vaccine.id || vaccine._id || Math.random()} className={`relative p-6 border transition-all duration-300 hover:-translate-y-1 ${
+                    isDark ? 'bg-neutral-900/50 border-white/5 hover:border-green-500/20' : 'bg-white border-neutral-300 hover:border-green-500/30 shadow-sm'
+                  }`}>
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                      {/* Name */}
+                      <div className="md:col-span-3">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Name
+                        </span>
+                        <h3 className={`text-lg font-bold ${spaceGrotesk.className}`}>{vaccine.name}</h3>
+                      </div>
 
-                    {/* Rotation (Doses) */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Rotation (Doses)
-                      </span>
-                      <p className={`${spaceGrotesk.className} text-2xl font-bold tracking-tight ${
-                        isDark ? 'text-green-400' : 'text-green-600'
-                      }`}>
-                        {vaccine.rotation}
-                      </p>
-                    </div>
+                      {/* Rotation (Doses) */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Rotation (Doses)
+                        </span>
+                        <p className={`${spaceGrotesk.className} text-2xl font-bold tracking-tight ${
+                          isDark ? 'text-green-400' : 'text-green-600'
+                        }`}>
+                          {vaccine.rotation}
+                        </p>
+                      </div>
 
-                    {/* Interval */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Interval (Days)
-                      </span>
-                      <p className={`text-sm font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                        {vaccine.interval}
-                      </p>
-                    </div>
+                      {/* Interval */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Interval
+                        </span>
+                        <p className={`text-sm font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                          {vaccine.interval}
+                        </p>
+                      </div>
 
-                    {/* Description */}
-                    <div className="md:col-span-4">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Description
-                      </span>
-                      <p className={`text-sm font-medium truncate ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
-                        {vaccine.description}
-                      </p>
-                    </div>
+                      {/* Description */}
+                      <div className="md:col-span-4">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Description
+                        </span>
+                        <p className={`text-sm font-medium truncate ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
+                          {vaccine.description}
+                        </p>
+                      </div>
 
-                    {/* Actions */}
-                    <div className="md:col-span-1 flex items-center justify-end gap-1">
-                      <button 
-                        className={`cursor-pointer p-2.5 border transition-all ${
-                          isDark 
-                            ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
-                            : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
-                        }`} 
-                        title="View"
-                        onClick={() => setViewingVaccine(vaccine)}
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
-                      <button 
-                        className={`cursor-pointer p-2.5 border transition-all ${
-                          isDark 
-                            ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
-                            : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
-                        }`} 
-                        title="Edit"
-                        onClick={() => handleOpenForm(vaccine)}
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button 
-                        className={`cursor-pointer p-2.5 border transition-all ${
-                          isDark 
-                            ? 'hover:bg-red-500/20 text-red-400 border-white/10 hover:border-red-500/20' 
-                            : 'hover:bg-red-50 text-red-600 border-neutral-200 hover:border-red-200'
-                        }`} 
-                        title="Delete"
-                        onClick={() => setDeleteConfirm(vaccine)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {/* Actions */}
+                      <div className="md:col-span-1 flex items-center justify-end gap-1">
+                        <button 
+                          className={`cursor-pointer p-2.5 border transition-all ${
+                            isDark 
+                              ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
+                              : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
+                          }`} 
+                          title="View"
+                          onClick={() => setViewingVaccine(vaccine)}
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button 
+                          className={`cursor-pointer p-2.5 border transition-all ${
+                            isDark 
+                              ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
+                              : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
+                          }`} 
+                          title="Edit"
+                          onClick={() => handleOpenForm(vaccine)}
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button 
+                          className={`cursor-pointer p-2.5 border transition-all ${
+                            isDark 
+                              ? 'hover:bg-red-500/20 text-red-400 border-white/10 hover:border-red-500/20' 
+                              : 'hover:bg-red-50 text-red-600 border-neutral-200 hover:border-red-200'
+                          }`} 
+                          title="Delete"
+                          onClick={() => setDeleteConfirm(vaccine)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
+                    <CornerBrackets />
                   </div>
-                  <CornerBrackets />
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
 
             {/* Empty State */}
-            {filteredVaccines.length === 0 && (
+            {!loading && filteredVaccines.length === 0 && (
               <div className={`relative p-16 border text-center ${
                 isDark ? 'bg-neutral-900/50 border-white/5' : 'bg-white border-neutral-300 shadow-sm'
               }`}>
@@ -489,8 +673,22 @@ export default function VaccinesManagement() {
                   No vaccines found
                 </h3>
                 <p className={`text-sm font-medium ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-                  Try adjusting your search or filter criteria
+                  {searchTerm || selectedRotation !== 'all' 
+                    ? 'Try adjusting your search or filter criteria' 
+                    : 'Click "Add Vaccine" to create your first record'}
                 </p>
+                {(searchTerm || selectedRotation !== 'all') && (
+                  <button
+                    onClick={handleClearSearch}
+                    className={`mt-4 px-4 py-2 border text-xs font-bold uppercase tracking-wider transition-all ${
+                      isDark 
+                        ? 'bg-neutral-800 hover:bg-neutral-700 border-white/10 hover:border-white/20' 
+                        : 'bg-white hover:bg-neutral-50 border-neutral-300 hover:border-neutral-400'
+                    }`}
+                  >
+                    Clear Filters
+                  </button>
+                )}
                 <CornerBrackets />
               </div>
             )}
@@ -531,6 +729,7 @@ export default function VaccinesManagement() {
                   ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
                   : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
               }`}
+              disabled={submitting}
             >
               <X className="w-5 h-5" />
             </button>
@@ -556,6 +755,7 @@ export default function VaccinesManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -579,6 +779,7 @@ export default function VaccinesManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -600,6 +801,7 @@ export default function VaccinesManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -621,6 +823,7 @@ export default function VaccinesManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -634,14 +837,20 @@ export default function VaccinesManagement() {
                     ? 'bg-neutral-800 hover:bg-neutral-700 border-neutral-700' 
                     : 'bg-white hover:bg-neutral-50 border-neutral-300'
                 }`}
+                disabled={submitting}
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="cursor-pointer flex-1 px-6 py-3.5 border font-bold text-[11px] uppercase tracking-widest bg-green-600 hover:bg-green-700 text-white border-green-600 transition-all"
+                disabled={submitting}
+                className={`cursor-pointer flex-1 px-6 py-3.5 border font-bold text-[11px] uppercase tracking-widest transition-all ${
+                  submitting
+                    ? 'bg-green-400 cursor-not-allowed'
+                    : 'bg-green-600 hover:bg-green-700'
+                } text-white border-green-600`}
               >
-                {editingVaccine ? 'Update' : 'Add'}
+                {submitting ? 'Saving...' : editingVaccine ? 'Update' : 'Add'}
               </button>
             </div>
           </form>
@@ -678,7 +887,7 @@ export default function VaccinesManagement() {
                   Cancel
                 </button>
                 <button
-                  onClick={() => handleDelete(deleteConfirm.id)}
+                  onClick={() => handleDelete(deleteConfirm.id || deleteConfirm._id)}
                   className="cursor-pointer flex-1 px-6 py-3.5 border font-bold text-[11px] uppercase tracking-widest bg-red-600 hover:bg-red-700 text-white border-red-600 transition-all"
                 >
                   Delete
@@ -766,7 +975,9 @@ export default function VaccinesManagement() {
                   }`}>
                     Added Date
                   </label>
-                  <p className="text-sm font-medium">{viewingVaccine.createdDate}</p>
+                  <p className="text-sm font-medium">
+                    {viewingVaccine.createdDate || (viewingVaccine.createdAt ? new Date(viewingVaccine.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A')}
+                  </p>
                 </div>
 
                 <div className="md:col-span-2">

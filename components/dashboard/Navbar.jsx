@@ -125,8 +125,8 @@ export default function Navbar({
           type: 'collapsible',
           children: [
             { name: 'Animals', route: '/livestockmanagement/animal/dashboard' },
-            { name: 'Species Management', route: '/livestockmanagement/species' },
-            { name: 'Health & Vaccination', route: '/livestockmanagement/health' },
+            { name: 'Species Management', route: '/livestockmanagement/species/dashboard' },
+            { name: 'Health & Vaccination', route: '/livestockmanagement/health/records' },
             { name: 'Reproduction', route: '/livestockmanagement/reproduction/dashboard' }
           ]
         },

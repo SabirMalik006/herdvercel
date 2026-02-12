@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Navbar from '@/components/dashboard/Navbar';
+import axios from 'axios';
 import { 
   Home, Search, Filter, Plus, Eye, Edit, Trash2, ChevronDown, X, Calendar, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight
 } from 'lucide-react';
@@ -11,6 +12,9 @@ import { usePathname } from 'next/navigation';
 
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], weight: ["300", "500", "700"] });
 const inter = Inter({ subsets: ["latin"], weight: ["400", "500", "600", "700"] });
+
+// API Base URL
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/health/vaccinations";
 
 export default function VaccinationsManagement() {
   const [isDark, setIsDark] = useState(false); 
@@ -24,6 +28,9 @@ export default function VaccinationsManagement() {
   const [viewingVaccination, setViewingVaccination] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [statuses, setStatuses] = useState(['scheduled', 'completed', 'overdue', 'cancelled']);
   const [formData, setFormData] = useState({
     name: '',
     vaccine: '',
@@ -34,34 +41,88 @@ export default function VaccinationsManagement() {
   });
   const pathname = usePathname();
 
-  // --- VACCINATIONS DATA WITH STORAGE ---
-  const [vaccinations, setVaccinations] = useState(() => {
-    // Load from storage on mount
+  // --- VACCINATIONS DATA ---
+  const [vaccinations, setVaccinations] = useState([]);
+
+  // Fetch Vaccinations from API
+  const fetchVaccinations = async () => {
+    try {
+      setLoading(true);
+      const response = await axios.get(API_URL);
+      
+      if (response.data && response.data.success && Array.isArray(response.data.data)) {
+        setVaccinations(response.data.data);
+        // Save to localStorage as backup
+        localStorage.setItem('livestockVaccinations', JSON.stringify(response.data.data));
+      } else if (response.data && Array.isArray(response.data)) {
+        setVaccinations(response.data);
+        localStorage.setItem('livestockVaccinations', JSON.stringify(response.data));
+      } else {
+        console.warn("Unexpected API response format:", response.data);
+        // Fallback to localStorage
+        loadFromLocalStorage();
+      }
+    } catch (error) {
+      console.error("Error fetching vaccinations:", error);
+      // Fallback to localStorage
+      loadFromLocalStorage();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch Statuses from API
+  const fetchStatuses = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/statuses`);
+      if (response.data && response.data.success && Array.isArray(response.data.data)) {
+        const stats = response.data.data;
+        if (stats.length > 0) {
+          setStatuses(stats);
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching statuses, using defaults:", error);
+      // Keep default statuses
+    }
+  };
+
+  // Load from localStorage as fallback
+  const loadFromLocalStorage = () => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('livestockVaccinations');
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
-          return parsed.length > 0 ? parsed : [];
+          setVaccinations(parsed.length > 0 ? parsed : []);
         } catch (e) {
           console.error('Error parsing stored vaccinations:', e);
+          setVaccinations([]);
         }
+      } else {
+        setVaccinations([]);
       }
     }
-    return [];
-  });
+  };
 
-  // Save to storage whenever vaccinations change
-  React.useEffect(() => {
-    if (typeof window !== 'undefined') {
+  // Initial data fetch
+  useEffect(() => {
+    fetchVaccinations();
+    fetchStatuses();
+  }, []);
+
+  // Save to localStorage whenever vaccinations change (backup)
+  useEffect(() => {
+    if (vaccinations.length > 0 && typeof window !== 'undefined') {
       localStorage.setItem('livestockVaccinations', JSON.stringify(vaccinations));
     }
   }, [vaccinations]);
 
   const filteredVaccinations = vaccinations.filter(vaccination => {
-    const matchesSearch = vaccination.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          vaccination.vaccine.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          vaccination.administeredBy.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = 
+      (vaccination.name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+      (vaccination.vaccine?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+      (vaccination.administeredBy?.toLowerCase() || '').includes(searchTerm.toLowerCase());
     const matchesStatus = selectedStatus === 'all' || vaccination.status === selectedStatus;
     return matchesSearch && matchesStatus;
   });
@@ -77,12 +138,12 @@ export default function VaccinationsManagement() {
     if (vaccination) {
       setEditingVaccination(vaccination);
       setFormData({
-        name: vaccination.name,
-        vaccine: vaccination.vaccine,
-        dateGiven: vaccination.dateGiven,
-        nextDueDate: vaccination.nextDueDate,
-        status: vaccination.status,
-        administeredBy: vaccination.administeredBy
+        name: vaccination.name || '',
+        vaccine: vaccination.vaccine || '',
+        dateGiven: vaccination.dateGiven || '',
+        nextDueDate: vaccination.nextDueDate || '',
+        status: vaccination.status || 'scheduled',
+        administeredBy: vaccination.administeredBy || ''
       });
     } else {
       setEditingVaccination(null);
@@ -111,45 +172,101 @@ export default function VaccinationsManagement() {
     });
   };
 
-  const handleSubmit = (e) => {
+  // Submit Handler - API Integration
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (editingVaccination) {
-      // Update existing vaccination
-      setVaccinations(vaccinations.map(vaccination => 
-        vaccination.id === editingVaccination.id 
-          ? { 
-              ...vaccination, 
-              name: formData.name,
-              vaccine: formData.vaccine,
-              dateGiven: formData.dateGiven,
-              nextDueDate: formData.nextDueDate,
-              status: formData.status,
-              administeredBy: formData.administeredBy
-            }
-          : vaccination
-      ));
-    } else {
-      // Add new vaccination
+    if (!formData.name || !formData.vaccine || !formData.dateGiven || !formData.nextDueDate) {
+      return;
+    }
+    
+    setSubmitting(true);
+    
+    try {
+      if (editingVaccination) {
+        // Update existing vaccination
+        const response = await axios.patch(`${API_URL}/${editingVaccination.id || editingVaccination._id}`, formData);
+        
+        if (response.data && response.data.success) {
+          await fetchVaccinations();
+        }
+      } else {
+        // Add new vaccination
+        const response = await axios.post(API_URL, formData);
+        
+        if (response.data && response.data.success) {
+          await fetchVaccinations();
+        }
+      }
+      
+      handleCloseForm();
+      
+      // Clear search and filter when adding new record
+      setSearchTerm('');
+      setSelectedStatus('all');
+      setCurrentPage(1);
+      
+    } catch (error) {
+      console.error("API Error, saving locally:", error);
+      
+      // Fallback to localStorage if API fails
       const newVaccination = {
-        id: vaccinations.length > 0 ? Math.max(...vaccinations.map(v => v.id)) + 1 : 1,
+        id: editingVaccination ? (editingVaccination.id || editingVaccination._id) : Date.now(),
         name: formData.name,
         vaccine: formData.vaccine,
         dateGiven: formData.dateGiven,
         nextDueDate: formData.nextDueDate,
         status: formData.status,
-        administeredBy: formData.administeredBy,
-        createdDate: new Date().toISOString().slice(0, 19).replace('T', ' ')
+        administeredBy: formData.administeredBy || null,
+        createdDate: new Date().toISOString().slice(0, 19).replace('T', ' '),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       };
-      setVaccinations([newVaccination, ...vaccinations]);
+      
+      let updatedRecords;
+      if (editingVaccination) {
+        updatedRecords = vaccinations.map(vaccination => 
+          (vaccination.id || vaccination._id) === (editingVaccination.id || editingVaccination._id) ? newVaccination : vaccination
+        );
+      } else {
+        updatedRecords = [newVaccination, ...vaccinations];
+      }
+      
+      setVaccinations(updatedRecords);
+      localStorage.setItem('livestockVaccinations', JSON.stringify(updatedRecords));
+      handleCloseForm();
+      
+      // Clear search and filter when adding new record (even on error)
+      setSearchTerm('');
+      setSelectedStatus('all');
+      setCurrentPage(1);
+      
+    } finally {
+      setSubmitting(false);
     }
-    
-    handleCloseForm();
   };
 
-  const handleDelete = (id) => {
-    setVaccinations(vaccinations.filter(vaccination => vaccination.id !== id));
+  // Delete Handler - API Integration
+  const handleDelete = async (id) => {
+    try {
+      await axios.delete(`${API_URL}/${id}`);
+      await fetchVaccinations();
+    } catch (error) {
+      console.error("Delete failed, deleting locally:", error);
+      const updatedRecords = vaccinations.filter(vaccination => 
+        (vaccination.id || vaccination._id) !== id
+      );
+      setVaccinations(updatedRecords);
+      localStorage.setItem('livestockVaccinations', JSON.stringify(updatedRecords));
+    }
     setDeleteConfirm(null);
+  };
+
+  // Clear search function
+  const handleClearSearch = () => {
+    setSearchTerm('');
+    setSelectedStatus('all');
+    setCurrentPage(1);
   };
 
   const getStatusColor = (status) => {
@@ -188,7 +305,7 @@ export default function VaccinationsManagement() {
       case 'cancelled':
         return 'Cancelled';
       default:
-        return status;
+        return status?.charAt(0).toUpperCase() + status?.slice(1) || status;
     }
   };
 
@@ -269,6 +386,9 @@ export default function VaccinationsManagement() {
               <p className={`text-sm font-light leading-relaxed ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
                 Schedule and track vaccination programs for your livestock.
               </p>
+              {loading && (
+                <span className="text-xs text-green-500 font-mono mt-2">SYNCING_DATA...</span>
+              )}
             </div>
             
             {/* Enhanced Tab Navigation */}
@@ -356,16 +476,17 @@ export default function VaccinationsManagement() {
                     : 'bg-blue-600 hover:bg-blue-700 text-white border-blue-600 shadow-sm'
                 }`}
                 onClick={() => handleOpenForm()}
+                disabled={submitting}
               >
                 <Plus className="w-4 h-4" />
-                Log Vaccination
+                {submitting ? 'Saving...' : 'Log Vaccination'}
               </button>
             </div>
           </section>
 
-          {/* SEARCH BAR */}
+          {/* SEARCH AND FILTER BAR */}
           <section className="space-y-6">
-            <div className="grid grid-cols-1 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Search Card */}
               <div className={`relative p-5 border group/search ${
                 isDark ? 'bg-neutral-900/50 border-white/5' : 'bg-white border-neutral-300 shadow-sm'
@@ -381,11 +502,84 @@ export default function VaccinationsManagement() {
                       isDark ? 'placeholder:text-neutral-600' : 'placeholder:text-neutral-400'
                     }`}
                   />
+                  {searchTerm && (
+                    <button
+                      onClick={handleClearSearch}
+                      className={`p-1 transition-all ${
+                        isDark ? 'hover:text-white text-neutral-400' : 'hover:text-neutral-900 text-neutral-500'
+                      }`}
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
                 <div className={`absolute bottom-0 left-0 h-[2px] w-0 group-hover/search:w-full transition-all duration-500 ${
                   isDark ? 'bg-green-500' : 'bg-green-600'
                 }`} />
                 <CornerBrackets />
+              </div>
+
+              {/* Filter Card */}
+              <div className="relative">
+                <div className={`relative p-5 border cursor-pointer transition-all ${
+                  isDark ? 'bg-neutral-900/50 border-white/5 hover:border-green-500/20' : 'bg-white border-neutral-300 hover:border-green-500/30 shadow-sm'
+                }`} onClick={() => setFilterOpen(!filterOpen)}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Filter className={`w-4 h-4 ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`} />
+                      <span className="text-[11px] font-bold uppercase tracking-wider">
+                        {selectedStatus === 'all' ? 'Filter by status' : getStatusLabel(selectedStatus)}
+                      </span>
+                    </div>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${filterOpen ? 'rotate-180' : ''}`} />
+                  </div>
+                  <CornerBrackets />
+                </div>
+
+                {filterOpen && (
+                  <div className={`absolute top-full mt-2 right-0 w-full border shadow-xl overflow-hidden z-20 backdrop-blur-md ${
+                    isDark ? 'bg-neutral-900/95 border-white/10' : 'bg-white/95 border-neutral-200'
+                  }`}>
+                    <button
+                      onClick={() => {
+                        setSelectedStatus('all');
+                        setFilterOpen(false);
+                      }}
+                      className={`cursor-pointer w-full px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider transition-colors ${
+                        selectedStatus === 'all'
+                          ? isDark
+                            ? 'bg-green-500/10 text-green-400 border-l-2 border-green-400'
+                            : 'bg-green-50 text-green-700 border-l-2 border-green-600'
+                          : isDark
+                          ? 'hover:bg-white/5'
+                          : 'hover:bg-neutral-50'
+                      }`}
+                    >
+                      All Status
+                    </button>
+                    {statuses.map((status) => (
+                      <button
+                        key={status}
+                        onClick={() => {
+                          setSelectedStatus(status);
+                          setFilterOpen(false);
+                          setCurrentPage(1);
+                        }}
+                        className={`cursor-pointer w-full px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider transition-colors ${
+                          selectedStatus === status
+                            ? isDark
+                              ? 'bg-green-500/10 text-green-400 border-l-2 border-green-400'
+                              : 'bg-green-50 text-green-700 border-l-2 border-green-600'
+                            : isDark
+                            ? 'hover:bg-white/5'
+                            : 'hover:bg-neutral-50'
+                        }`}
+                      >
+                        {getStatusLabel(status)}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </section>
@@ -399,128 +593,156 @@ export default function VaccinationsManagement() {
               }`}>
                 All Vaccinations
               </h2>
+              <button
+                onClick={() => {
+                  fetchVaccinations();
+                  fetchStatuses();
+                }}
+                disabled={loading}
+                className={`ml-auto text-xs font-mono px-3 py-1 border transition-all ${
+                  loading 
+                    ? 'opacity-50 cursor-not-allowed' 
+                    : isDark 
+                      ? 'hover:bg-white/5 border-white/10 hover:border-green-500/20' 
+                      : 'hover:bg-neutral-50 border-neutral-200 hover:border-green-300'
+                }`}
+              >
+                {loading ? 'REFRESHING...' : 'REFRESH'}
+              </button>
             </div>
             
-            <div className="grid grid-cols-1 gap-4">
-              {paginatedVaccinations.map((vaccination) => (
-                <div key={vaccination.id} className={`relative p-6 border transition-all duration-300 hover:-translate-y-1 ${
-                  isDark ? 'bg-neutral-900/50 border-white/5 hover:border-green-500/20' : 'bg-white border-neutral-300 hover:border-green-500/30 shadow-sm'
-                }`}>
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                    {/* Name */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Name
-                      </span>
-                      <h3 className={`text-base font-bold ${spaceGrotesk.className}`}>{vaccination.name}</h3>
-                    </div>
+            {loading && vaccinations.length === 0 ? (
+              <div className={`relative p-16 border text-center ${
+                isDark ? 'bg-neutral-900/50 border-white/5' : 'bg-white border-neutral-300 shadow-sm'
+              }`}>
+                <div className="animate-spin w-12 h-12 border-3 border-green-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+                <h3 className={`${spaceGrotesk.className} text-2xl font-bold mb-2 uppercase tracking-tight`}>
+                  Loading vaccinations...
+                </h3>
+                <CornerBrackets />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4">
+                {paginatedVaccinations.map((vaccination) => (
+                  <div key={vaccination.id || vaccination._id || Math.random()} className={`relative p-6 border transition-all duration-300 hover:-translate-y-1 ${
+                    isDark ? 'bg-neutral-900/50 border-white/5 hover:border-green-500/20' : 'bg-white border-neutral-300 hover:border-green-500/30 shadow-sm'
+                  }`}>
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                      {/* Name */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Name
+                        </span>
+                        <h3 className={`text-base font-bold ${spaceGrotesk.className}`}>{vaccination.name}</h3>
+                      </div>
 
-                    {/* Vaccine */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Vaccine
-                      </span>
-                      <p className={`text-sm font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                        {vaccination.vaccine}
-                      </p>
-                    </div>
+                      {/* Vaccine */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Vaccine
+                        </span>
+                        <p className={`text-sm font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                          {vaccination.vaccine}
+                        </p>
+                      </div>
 
-                    {/* Date Given */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Date Given
-                      </span>
-                      <p className={`text-sm font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                        {vaccination.dateGiven}
-                      </p>
-                    </div>
+                      {/* Date Given */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Date Given
+                        </span>
+                        <p className={`text-sm font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                          {vaccination.dateGiven}
+                        </p>
+                      </div>
 
-                    {/* Next Due Date */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Next Due Date
-                      </span>
-                      <p className={`text-sm font-medium ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
-                        {vaccination.nextDueDate}
-                      </p>
-                    </div>
+                      {/* Next Due Date */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Next Due Date
+                        </span>
+                        <p className={`text-sm font-medium ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
+                          {vaccination.nextDueDate}
+                        </p>
+                      </div>
 
-                    {/* Status */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Status
-                      </span>
-                      <span className={`inline-flex items-center px-3 py-1 border text-[10px] font-bold font-mono uppercase tracking-wider ${getStatusColor(vaccination.status)}`}>
-                        {getStatusLabel(vaccination.status)}
-                      </span>
-                    </div>
+                      {/* Status */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Status
+                        </span>
+                        <span className={`inline-flex items-center px-3 py-1 border text-[10px] font-bold font-mono uppercase tracking-wider ${getStatusColor(vaccination.status)}`}>
+                          {getStatusLabel(vaccination.status)}
+                        </span>
+                      </div>
 
-                    {/* Administered By */}
-                    <div className="md:col-span-1">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Administered By
-                      </span>
-                      <p className={`text-sm font-medium truncate ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
-                        {vaccination.administeredBy || '-'}
-                      </p>
-                    </div>
+                      {/* Administered By */}
+                      <div className="md:col-span-1">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Administered By
+                        </span>
+                        <p className={`text-sm font-medium truncate ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
+                          {vaccination.administeredBy || '-'}
+                        </p>
+                      </div>
 
-                    {/* Actions */}
-                    <div className="md:col-span-1 flex items-center justify-end gap-1">
-                      <button 
-                        className={`cursor-pointer p-2.5 border transition-all ${
-                          isDark 
-                            ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
-                            : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
-                        }`} 
-                        title="View"
-                        onClick={() => setViewingVaccination(vaccination)}
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
-                      <button 
-                        className={`cursor-pointer p-2.5 border transition-all ${
-                          isDark 
-                            ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
-                            : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
-                        }`} 
-                        title="Edit"
-                        onClick={() => handleOpenForm(vaccination)}
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button 
-                        className={`cursor-pointer p-2.5 border transition-all ${
-                          isDark 
-                            ? 'hover:bg-red-500/20 text-red-400 border-white/10 hover:border-red-500/20' 
-                            : 'hover:bg-red-50 text-red-600 border-neutral-200 hover:border-red-200'
-                        }`} 
-                        title="Delete"
-                        onClick={() => setDeleteConfirm(vaccination)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {/* Actions */}
+                      <div className="md:col-span-1 flex items-center justify-end gap-1">
+                        <button 
+                          className={`cursor-pointer p-2.5 border transition-all ${
+                            isDark 
+                              ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
+                              : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
+                          }`} 
+                          title="View"
+                          onClick={() => setViewingVaccination(vaccination)}
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button 
+                          className={`cursor-pointer p-2.5 border transition-all ${
+                            isDark 
+                              ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
+                              : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
+                          }`} 
+                          title="Edit"
+                          onClick={() => handleOpenForm(vaccination)}
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button 
+                          className={`cursor-pointer p-2.5 border transition-all ${
+                            isDark 
+                              ? 'hover:bg-red-500/20 text-red-400 border-white/10 hover:border-red-500/20' 
+                              : 'hover:bg-red-50 text-red-600 border-neutral-200 hover:border-red-200'
+                          }`} 
+                          title="Delete"
+                          onClick={() => setDeleteConfirm(vaccination)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
+                    <CornerBrackets />
                   </div>
-                  <CornerBrackets />
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
 
             {/* Empty State */}
-            {filteredVaccinations.length === 0 && (
+            {!loading && filteredVaccinations.length === 0 && (
               <div className={`relative p-16 border text-center ${
                 isDark ? 'bg-neutral-900/50 border-white/5' : 'bg-white border-neutral-300 shadow-sm'
               }`}>
@@ -529,14 +751,28 @@ export default function VaccinationsManagement() {
                   No vaccinations found
                 </h3>
                 <p className={`text-sm font-medium ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-                  Try adjusting your search criteria
+                  {searchTerm || selectedStatus !== 'all' 
+                    ? 'Try adjusting your search or filter criteria' 
+                    : 'Click "Log Vaccination" to create your first record'}
                 </p>
+                {(searchTerm || selectedStatus !== 'all') && (
+                  <button
+                    onClick={handleClearSearch}
+                    className={`mt-4 px-4 py-2 border text-xs font-bold uppercase tracking-wider transition-all ${
+                      isDark 
+                        ? 'bg-neutral-800 hover:bg-neutral-700 border-white/10 hover:border-white/20' 
+                        : 'bg-white hover:bg-neutral-50 border-neutral-300 hover:border-neutral-400'
+                    }`}
+                  >
+                    Clear Filters
+                  </button>
+                )}
                 <CornerBrackets />
               </div>
             )}
 
             {/* Pagination */}
-            {filteredVaccinations.length > 0 && (
+            {!loading && filteredVaccinations.length > 0 && (
               <div className={`flex items-center justify-between p-4 border ${
                 isDark ? 'bg-neutral-900/50 border-white/5' : 'bg-white border-neutral-300 shadow-sm'
               }`}>
@@ -667,6 +903,7 @@ export default function VaccinationsManagement() {
                   ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
                   : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
               }`}
+              disabled={submitting}
             >
               <X className="w-5 h-5" />
             </button>
@@ -692,6 +929,7 @@ export default function VaccinationsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-blue-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-blue-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -713,6 +951,7 @@ export default function VaccinationsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-blue-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-blue-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -733,6 +972,7 @@ export default function VaccinationsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-blue-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-blue-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -753,6 +993,7 @@ export default function VaccinationsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-blue-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-blue-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -771,11 +1012,13 @@ export default function VaccinationsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-blue-500' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-blue-500'
                 }`}
+                disabled={submitting}
               >
-                <option value="scheduled">Scheduled</option>
-                <option value="completed">Completed</option>
-                <option value="overdue">Overdue</option>
-                <option value="cancelled">Cancelled</option>
+                {statuses.map((status) => (
+                  <option key={status} value={status}>
+                    {getStatusLabel(status)}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -796,6 +1039,7 @@ export default function VaccinationsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-blue-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-blue-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -809,14 +1053,20 @@ export default function VaccinationsManagement() {
                     ? 'bg-neutral-800 hover:bg-neutral-700 border-neutral-700' 
                     : 'bg-white hover:bg-neutral-50 border-neutral-300'
                 }`}
+                disabled={submitting}
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="cursor-pointer flex-1 px-6 py-3.5 border font-bold text-[11px] uppercase tracking-widest bg-blue-600 hover:bg-blue-700 text-white border-blue-600 transition-all"
+                disabled={submitting}
+                className={`cursor-pointer flex-1 px-6 py-3.5 border font-bold text-[11px] uppercase tracking-widest transition-all ${
+                  submitting
+                    ? 'bg-blue-400 cursor-not-allowed'
+                    : 'bg-blue-600 hover:bg-blue-700'
+                } text-white border-blue-600`}
               >
-                {editingVaccination ? 'Update' : 'Log'}
+                {submitting ? 'Saving...' : editingVaccination ? 'Update' : 'Log'}
               </button>
             </div>
           </form>
@@ -853,7 +1103,7 @@ export default function VaccinationsManagement() {
                   Cancel
                 </button>
                 <button
-                  onClick={() => handleDelete(deleteConfirm.id)}
+                  onClick={() => handleDelete(deleteConfirm.id || deleteConfirm._id)}
                   className="cursor-pointer flex-1 px-6 py-3.5 border font-bold text-[11px] uppercase tracking-widest bg-red-600 hover:bg-red-700 text-white border-red-600 transition-all"
                 >
                   Delete
@@ -958,6 +1208,17 @@ export default function VaccinationsManagement() {
                     Administered By
                   </label>
                   <p className="text-sm font-medium">{viewingVaccination.administeredBy || 'Not specified'}</p>
+                </div>
+
+                <div>
+                  <label className={`block text-[9px] font-mono font-bold uppercase tracking-[0.25em] mb-2 ${
+                    isDark ? 'text-neutral-500' : 'text-neutral-400'
+                  }`}>
+                    Added Date
+                  </label>
+                  <p className="text-sm font-medium">
+                    {viewingVaccination.createdDate || (viewingVaccination.createdAt ? new Date(viewingVaccination.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A')}
+                  </p>
                 </div>
               </div>
 

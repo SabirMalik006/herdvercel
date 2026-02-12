@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Navbar from '@/components/dashboard/Navbar';
+import axios from 'axios';
 import { 
   Home, Search, Filter, Plus, Eye, Edit, Trash2, ChevronDown, X, Activity
 } from 'lucide-react';
@@ -11,6 +12,9 @@ import { usePathname } from 'next/navigation';
 
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], weight: ["300", "500", "700"] });
 const inter = Inter({ subsets: ["latin"], weight: ["400", "500", "600", "700"] });
+
+// API Base URL
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/health/records";
 
 export default function HealthRecordsManagement() {
   const [isDark, setIsDark] = useState(false); 
@@ -22,6 +26,9 @@ export default function HealthRecordsManagement() {
   const [editingRecord, setEditingRecord] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [viewingRecord, setViewingRecord] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [statuses, setStatuses] = useState(['under-treatment', 'sick', 'recovered', 'monitoring']);
   const [formData, setFormData] = useState({
     date: '',
     animalName: '',
@@ -33,35 +40,89 @@ export default function HealthRecordsManagement() {
   });
   const pathname = usePathname();
 
-  // --- HEALTH RECORDS DATA WITH STORAGE ---
-  const [healthRecords, setHealthRecords] = useState(() => {
-    // Load from storage on mount
+  // --- HEALTH RECORDS DATA ---
+  const [healthRecords, setHealthRecords] = useState([]);
+
+  // Fetch Health Records from API
+  const fetchHealthRecords = async () => {
+    try {
+      setLoading(true);
+      const response = await axios.get(API_URL);
+      
+      if (response.data && response.data.success && Array.isArray(response.data.data)) {
+        setHealthRecords(response.data.data);
+        // Save to localStorage as backup
+        localStorage.setItem('livestockHealthRecords', JSON.stringify(response.data.data));
+      } else if (response.data && Array.isArray(response.data)) {
+        setHealthRecords(response.data);
+        localStorage.setItem('livestockHealthRecords', JSON.stringify(response.data));
+      } else {
+        console.warn("Unexpected API response format:", response.data);
+        // Fallback to localStorage
+        loadFromLocalStorage();
+      }
+    } catch (error) {
+      console.error("Error fetching health records:", error);
+      // Fallback to localStorage
+      loadFromLocalStorage();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch Statuses from API
+  // const fetchStatuses = async () => {
+  //   try {
+  //     const response = await axios.get(`${API_URL}/statuses`);
+  //     if (response.data && response.data.success && Array.isArray(response.data.data)) {
+  //       const stats = response.data.data;
+  //       if (stats.length > 0) {
+  //         setStatuses(stats);
+  //       }
+  //     }
+  //   } catch (error) {
+  //     console.error("Error fetching statuses, using defaults:", error);
+  //     // Keep default statuses
+  //   }
+  // };
+
+  // Load from localStorage as fallback
+  const loadFromLocalStorage = () => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('livestockHealthRecords');
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
-          return parsed.length > 0 ? parsed : [];
+          setHealthRecords(parsed.length > 0 ? parsed : []);
         } catch (e) {
           console.error('Error parsing stored health records:', e);
+          setHealthRecords([]);
         }
+      } else {
+        setHealthRecords([]);
       }
     }
-    return [];
-  });
+  };
 
-  // Save to storage whenever health records change
-  React.useEffect(() => {
-    if (typeof window !== 'undefined') {
+  // Initial data fetch
+  useEffect(() => {
+    fetchHealthRecords();
+    // fetchStatuses();
+  }, []);
+
+  // Save to localStorage whenever health records change (backup)
+  useEffect(() => {
+    if (healthRecords.length > 0 && typeof window !== 'undefined') {
       localStorage.setItem('livestockHealthRecords', JSON.stringify(healthRecords));
     }
   }, [healthRecords]);
 
   const filteredRecords = healthRecords.filter(record => {
-    const matchesSearch = record.animalName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          record.diagnosis.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          record.treatment.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          record.veterinarian.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = 
+      (record.animalName?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+      (record.diagnosis?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+      (record.treatment?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+      (record.veterinarian?.toLowerCase() || '').includes(searchTerm.toLowerCase());
     const matchesStatus = selectedStatus === 'all' || record.status === selectedStatus;
     return matchesSearch && matchesStatus;
   });
@@ -71,13 +132,13 @@ export default function HealthRecordsManagement() {
     if (record) {
       setEditingRecord(record);
       setFormData({
-        date: record.date,
-        animalName: record.animalName,
-        diagnosis: record.diagnosis,
-        treatment: record.treatment,
-        status: record.status,
-        nextCheckupDate: record.nextCheckupDate,
-        veterinarian: record.veterinarian
+        date: record.date || '',
+        animalName: record.animalName || '',
+        diagnosis: record.diagnosis || '',
+        treatment: record.treatment || '',
+        status: record.status || 'under-treatment',
+        nextCheckupDate: record.nextCheckupDate || '',
+        veterinarian: record.veterinarian || ''
       });
     } else {
       setEditingRecord(null);
@@ -108,47 +169,99 @@ export default function HealthRecordsManagement() {
     });
   };
 
-  const handleSubmit = (e) => {
+  // Submit Handler - API Integration
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (editingRecord) {
-      // Update existing health record
-      setHealthRecords(healthRecords.map(record => 
-        record.id === editingRecord.id 
-          ? { 
-              ...record, 
-              date: formData.date,
-              animalName: formData.animalName,
-              diagnosis: formData.diagnosis,
-              treatment: formData.treatment,
-              status: formData.status,
-              nextCheckupDate: formData.nextCheckupDate,
-              veterinarian: formData.veterinarian
-            }
-          : record
-      ));
-    } else {
-      // Add new health record
+    if (!formData.date || !formData.animalName || !formData.diagnosis || !formData.treatment) {
+      return;
+    }
+    
+    setSubmitting(true);
+    
+    try {
+      if (editingRecord) {
+        // Update existing health record
+        const response = await axios.patch(`${API_URL}/${editingRecord.id || editingRecord._id}`, formData);
+        
+        if (response.data && response.data.success) {
+          await fetchHealthRecords();
+        }
+      } else {
+        // Add new health record
+        const response = await axios.post(API_URL, formData);
+        
+        if (response.data && response.data.success) {
+          await fetchHealthRecords();
+        }
+      }
+      
+      handleCloseForm();
+      
+      // Clear search and filter when adding new record
+      setSearchTerm('');
+      setSelectedStatus('all');
+      
+    } catch (error) {
+      console.error("API Error, saving locally:", error);
+      
+      // Fallback to localStorage if API fails
       const newRecord = {
-        id: healthRecords.length > 0 ? Math.max(...healthRecords.map(r => r.id)) + 1 : 1,
+        id: editingRecord ? (editingRecord.id || editingRecord._id) : Date.now(),
         date: formData.date,
         animalName: formData.animalName,
         diagnosis: formData.diagnosis,
         treatment: formData.treatment,
         status: formData.status,
-        nextCheckupDate: formData.nextCheckupDate,
-        veterinarian: formData.veterinarian,
-        createdDate: new Date().toISOString().slice(0, 19).replace('T', ' ')
+        nextCheckupDate: formData.nextCheckupDate || null,
+        veterinarian: formData.veterinarian || null,
+        createdDate: new Date().toISOString().slice(0, 19).replace('T', ' '),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       };
-      setHealthRecords([newRecord, ...healthRecords]);
+      
+      let updatedRecords;
+      if (editingRecord) {
+        updatedRecords = healthRecords.map(record => 
+          (record.id || record._id) === (editingRecord.id || editingRecord._id) ? newRecord : record
+        );
+      } else {
+        updatedRecords = [newRecord, ...healthRecords];
+      }
+      
+      setHealthRecords(updatedRecords);
+      localStorage.setItem('livestockHealthRecords', JSON.stringify(updatedRecords));
+      handleCloseForm();
+      
+      // Clear search and filter when adding new record (even on error)
+      setSearchTerm('');
+      setSelectedStatus('all');
+      
+    } finally {
+      setSubmitting(false);
     }
-    
-    handleCloseForm();
   };
 
-  const handleDelete = (id) => {
-    setHealthRecords(healthRecords.filter(record => record.id !== id));
+  // Delete Handler - API Integration
+  const handleDelete = async (id) => {
+    try {
+      await axios.delete(`${API_URL}/${id}`);
+      await fetchHealthRecords();
+    } catch (error) {
+      console.error("Delete failed, deleting locally:", error);
+      const updatedRecords = healthRecords.filter(record => 
+        (record.id || record._id) !== id
+      );
+      setHealthRecords(updatedRecords);
+      localStorage.setItem('livestockHealthRecords', JSON.stringify(updatedRecords));
+    }
     setDeleteConfirm(null);
+  };
+
+  // Clear search function
+  const handleClearSearch = () => {
+    setSearchTerm('');
+    setSelectedStatus('all');
   };
 
   const getStatusColor = (status) => {
@@ -187,7 +300,7 @@ export default function HealthRecordsManagement() {
       case 'monitoring':
         return 'Monitoring';
       default:
-        return status;
+        return status?.charAt(0).toUpperCase() + status?.slice(1) || status;
     }
   };
 
@@ -268,6 +381,9 @@ export default function HealthRecordsManagement() {
               <p className={`text-sm font-light leading-relaxed ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
                 Track medical history, treatments, and health events for your livestock.
               </p>
+              {loading && (
+                <span className="text-xs text-green-500 font-mono mt-2">SYNCING_DATA...</span>
+              )}
             </div>
             
             {/* Enhanced Tab Navigation */}
@@ -355,9 +471,10 @@ export default function HealthRecordsManagement() {
                     : 'bg-green-600 hover:bg-green-700 text-white border-green-600 shadow-sm'
                 }`}
                 onClick={() => handleOpenForm()}
+                disabled={submitting}
               >
                 <Plus className="w-4 h-4" />
-                Add Health Record
+                {submitting ? 'Saving...' : 'Add Health Record'}
               </button>
             </div>
           </section>
@@ -380,6 +497,16 @@ export default function HealthRecordsManagement() {
                       isDark ? 'placeholder:text-neutral-600' : 'placeholder:text-neutral-400'
                     }`}
                   />
+                  {searchTerm && (
+                    <button
+                      onClick={handleClearSearch}
+                      className={`p-1 transition-all ${
+                        isDark ? 'hover:text-white text-neutral-400' : 'hover:text-neutral-900 text-neutral-500'
+                      }`}
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
                 <div className={`absolute bottom-0 left-0 h-[2px] w-0 group-hover/search:w-full transition-all duration-500 ${
                   isDark ? 'bg-green-500' : 'bg-green-600'
@@ -395,7 +522,9 @@ export default function HealthRecordsManagement() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Filter className={`w-4 h-4 ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`} />
-                      <span className="text-[11px] font-bold uppercase tracking-wider">All Status</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider">
+                        {selectedStatus === 'all' ? 'Filter by status' : getStatusLabel(selectedStatus)}
+                      </span>
                     </div>
                     <ChevronDown className={`w-4 h-4 transition-transform ${filterOpen ? 'rotate-180' : ''}`} />
                   </div>
@@ -406,7 +535,24 @@ export default function HealthRecordsManagement() {
                   <div className={`absolute top-full mt-2 right-0 w-full border shadow-xl overflow-hidden z-20 backdrop-blur-md ${
                     isDark ? 'bg-neutral-900/95 border-white/10' : 'bg-white/95 border-neutral-200'
                   }`}>
-                    {['all', 'under-treatment', 'sick', 'recovered', 'monitoring'].map((status) => (
+                    <button
+                      onClick={() => {
+                        setSelectedStatus('all');
+                        setFilterOpen(false);
+                      }}
+                      className={`cursor-pointer w-full px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider transition-colors ${
+                        selectedStatus === 'all'
+                          ? isDark
+                            ? 'bg-green-500/10 text-green-400 border-l-2 border-green-400'
+                            : 'bg-green-50 text-green-700 border-l-2 border-green-600'
+                          : isDark
+                          ? 'hover:bg-white/5'
+                          : 'hover:bg-neutral-50'
+                      }`}
+                    >
+                      All Status
+                    </button>
+                    {statuses.map((status) => (
                       <button
                         key={status}
                         onClick={() => {
@@ -423,7 +569,7 @@ export default function HealthRecordsManagement() {
                             : 'hover:bg-neutral-50'
                         }`}
                       >
-                        {status === 'all' ? 'All Status' : getStatusLabel(status)}
+                        {getStatusLabel(status)}
                       </button>
                     ))}
                   </div>
@@ -441,128 +587,156 @@ export default function HealthRecordsManagement() {
               }`}>
                 All Health Records
               </h2>
+              <button
+                onClick={() => {
+                  fetchHealthRecords();
+                  // fetchStatuses();
+                }}
+                disabled={loading}
+                className={`ml-auto text-xs font-mono px-3 py-1 border transition-all ${
+                  loading 
+                    ? 'opacity-50 cursor-not-allowed' 
+                    : isDark 
+                      ? 'hover:bg-white/5 border-white/10 hover:border-green-500/20' 
+                      : 'hover:bg-neutral-50 border-neutral-200 hover:border-green-300'
+                }`}
+              >
+                {loading ? 'REFRESHING...' : 'REFRESH'}
+              </button>
             </div>
             
-            <div className="grid grid-cols-1 gap-4">
-              {filteredRecords.map((record) => (
-                <div key={record.id} className={`relative p-6 border transition-all duration-300 hover:-translate-y-1 ${
-                  isDark ? 'bg-neutral-900/50 border-white/5 hover:border-green-500/20' : 'bg-white border-neutral-300 hover:border-green-500/30 shadow-sm'
-                }`}>
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-                    {/* Date */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Date
-                      </span>
-                      <p className={`text-sm font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                        {record.date}
-                      </p>
-                    </div>
+            {loading && healthRecords.length === 0 ? (
+              <div className={`relative p-16 border text-center ${
+                isDark ? 'bg-neutral-900/50 border-white/5' : 'bg-white border-neutral-300 shadow-sm'
+              }`}>
+                <div className="animate-spin w-12 h-12 border-3 border-green-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+                <h3 className={`${spaceGrotesk.className} text-2xl font-bold mb-2 uppercase tracking-tight`}>
+                  Loading health records...
+                </h3>
+                <CornerBrackets />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4">
+                {filteredRecords.map((record) => (
+                  <div key={record.id || record._id || Math.random()} className={`relative p-6 border transition-all duration-300 hover:-translate-y-1 ${
+                    isDark ? 'bg-neutral-900/50 border-white/5 hover:border-green-500/20' : 'bg-white border-neutral-300 hover:border-green-500/30 shadow-sm'
+                  }`}>
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                      {/* Date */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Date
+                        </span>
+                        <p className={`text-sm font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                          {record.date}
+                        </p>
+                      </div>
 
-                    {/* Animal Name */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Animal Name
-                      </span>
-                      <h3 className={`text-base font-bold ${spaceGrotesk.className}`}>{record.animalName}</h3>
-                    </div>
+                      {/* Animal Name */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Animal Name
+                        </span>
+                        <h3 className={`text-base font-bold ${spaceGrotesk.className}`}>{record.animalName}</h3>
+                      </div>
 
-                    {/* Diagnosis */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Diagnosis
-                      </span>
-                      <p className={`text-sm font-medium truncate ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                        {record.diagnosis}
-                      </p>
-                    </div>
+                      {/* Diagnosis */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Diagnosis
+                        </span>
+                        <p className={`text-sm font-medium truncate ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                          {record.diagnosis}
+                        </p>
+                      </div>
 
-                    {/* Treatment */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Treatment
-                      </span>
-                      <p className={`text-sm font-medium truncate ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
-                        {record.treatment}
-                      </p>
-                    </div>
+                      {/* Treatment */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Treatment
+                        </span>
+                        <p className={`text-sm font-medium truncate ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
+                          {record.treatment}
+                        </p>
+                      </div>
 
-                    {/* Status */}
-                    <div className="md:col-span-2">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Status
-                      </span>
-                      <span className={`inline-flex items-center px-3 py-1 border text-[10px] font-bold font-mono uppercase tracking-wider ${getStatusColor(record.status)}`}>
-                        {getStatusLabel(record.status)}
-                      </span>
-                    </div>
+                      {/* Status */}
+                      <div className="md:col-span-2">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Status
+                        </span>
+                        <span className={`inline-flex items-center px-3 py-1 border text-[10px] font-bold font-mono uppercase tracking-wider ${getStatusColor(record.status)}`}>
+                          {getStatusLabel(record.status)}
+                        </span>
+                      </div>
 
-                    {/* Next Checkup Date */}
-                    <div className="md:col-span-1">
-                      <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
-                        isDark ? 'text-neutral-500' : 'text-neutral-400'
-                      }`}>
-                        Next Checkup
-                      </span>
-                      <p className={`text-sm font-medium ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
-                        {record.nextCheckupDate || '-'}
-                      </p>
-                    </div>
+                      {/* Next Checkup Date */}
+                      <div className="md:col-span-1">
+                        <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.25em] block mb-2 ${
+                          isDark ? 'text-neutral-500' : 'text-neutral-400'
+                        }`}>
+                          Next Checkup
+                        </span>
+                        <p className={`text-sm font-medium ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
+                          {record.nextCheckupDate || '-'}
+                        </p>
+                      </div>
 
-                    {/* Actions */}
-                    <div className="md:col-span-1 flex items-center justify-end gap-1">
-                      <button 
-                        className={`cursor-pointer p-2.5 border transition-all ${
-                          isDark 
-                            ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
-                            : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
-                        }`} 
-                        title="View"
-                        onClick={() => setViewingRecord(record)}
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
-                      <button 
-                        className={`cursor-pointer p-2.5 border transition-all ${
-                          isDark 
-                            ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
-                            : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
-                        }`} 
-                        title="Edit"
-                        onClick={() => handleOpenForm(record)}
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button 
-                        className={`cursor-pointer p-2.5 border transition-all ${
-                          isDark 
-                            ? 'hover:bg-red-500/20 text-red-400 border-white/10 hover:border-red-500/20' 
-                            : 'hover:bg-red-50 text-red-600 border-neutral-200 hover:border-red-200'
-                        }`} 
-                        title="Delete"
-                        onClick={() => setDeleteConfirm(record)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {/* Actions */}
+                      <div className="md:col-span-1 flex items-center justify-end gap-1">
+                        <button 
+                          className={`cursor-pointer p-2.5 border transition-all ${
+                            isDark 
+                              ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
+                              : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
+                          }`} 
+                          title="View"
+                          onClick={() => setViewingRecord(record)}
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button 
+                          className={`cursor-pointer p-2.5 border transition-all ${
+                            isDark 
+                              ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
+                              : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
+                          }`} 
+                          title="Edit"
+                          onClick={() => handleOpenForm(record)}
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button 
+                          className={`cursor-pointer p-2.5 border transition-all ${
+                            isDark 
+                              ? 'hover:bg-red-500/20 text-red-400 border-white/10 hover:border-red-500/20' 
+                              : 'hover:bg-red-50 text-red-600 border-neutral-200 hover:border-red-200'
+                          }`} 
+                          title="Delete"
+                          onClick={() => setDeleteConfirm(record)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
+                    <CornerBrackets />
                   </div>
-                  <CornerBrackets />
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
 
             {/* Empty State */}
-            {filteredRecords.length === 0 && (
+            {!loading && filteredRecords.length === 0 && (
               <div className={`relative p-16 border text-center ${
                 isDark ? 'bg-neutral-900/50 border-white/5' : 'bg-white border-neutral-300 shadow-sm'
               }`}>
@@ -571,8 +745,22 @@ export default function HealthRecordsManagement() {
                   No health records found
                 </h3>
                 <p className={`text-sm font-medium ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-                  Try adjusting your search or filter criteria
+                  {searchTerm || selectedStatus !== 'all' 
+                    ? 'Try adjusting your search or filter criteria' 
+                    : 'Click "Add Health Record" to create your first record'}
                 </p>
+                {(searchTerm || selectedStatus !== 'all') && (
+                  <button
+                    onClick={handleClearSearch}
+                    className={`mt-4 px-4 py-2 border text-xs font-bold uppercase tracking-wider transition-all ${
+                      isDark 
+                        ? 'bg-neutral-800 hover:bg-neutral-700 border-white/10 hover:border-white/20' 
+                        : 'bg-white hover:bg-neutral-50 border-neutral-300 hover:border-neutral-400'
+                    }`}
+                  >
+                    Clear Filters
+                  </button>
+                )}
                 <CornerBrackets />
               </div>
             )}
@@ -613,6 +801,7 @@ export default function HealthRecordsManagement() {
                   ? 'hover:bg-white/10 border-white/10 hover:border-white/20' 
                   : 'hover:bg-neutral-50 border-neutral-200 hover:border-neutral-300'
               }`}
+              disabled={submitting}
             >
               <X className="w-5 h-5" />
             </button>
@@ -637,6 +826,7 @@ export default function HealthRecordsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -658,6 +848,7 @@ export default function HealthRecordsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -679,6 +870,7 @@ export default function HealthRecordsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -700,6 +892,7 @@ export default function HealthRecordsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -718,11 +911,13 @@ export default function HealthRecordsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500'
                 }`}
+                disabled={submitting}
               >
-                <option value="under-treatment">Under Treatment</option>
-                <option value="sick">Sick</option>
-                <option value="recovered">Recovered</option>
-                <option value="monitoring">Monitoring</option>
+                {statuses.map((status) => (
+                  <option key={status} value={status}>
+                    {getStatusLabel(status)}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -742,6 +937,7 @@ export default function HealthRecordsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -762,6 +958,7 @@ export default function HealthRecordsManagement() {
                     ? 'bg-neutral-900 border-white/10 focus:border-green-500 placeholder:text-neutral-600' 
                     : 'bg-neutral-50 border-neutral-300 focus:border-green-500 placeholder:text-neutral-400'
                 }`}
+                disabled={submitting}
               />
             </div>
 
@@ -775,14 +972,20 @@ export default function HealthRecordsManagement() {
                     ? 'bg-neutral-800 hover:bg-neutral-700 border-neutral-700' 
                     : 'bg-white hover:bg-neutral-50 border-neutral-300'
                 }`}
+                disabled={submitting}
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="cursor-pointer flex-1 px-6 py-3.5 border font-bold text-[11px] uppercase tracking-widest bg-green-600 hover:bg-green-700 text-white border-green-600 transition-all"
+                disabled={submitting}
+                className={`cursor-pointer flex-1 px-6 py-3.5 border font-bold text-[11px] uppercase tracking-widest transition-all ${
+                  submitting
+                    ? 'bg-green-400 cursor-not-allowed'
+                    : 'bg-green-600 hover:bg-green-700'
+                } text-white border-green-600`}
               >
-                {editingRecord ? 'Update' : 'Add'}
+                {submitting ? 'Saving...' : editingRecord ? 'Update' : 'Add'}
               </button>
             </div>
           </form>
@@ -819,7 +1022,7 @@ export default function HealthRecordsManagement() {
                   Cancel
                 </button>
                 <button
-                  onClick={() => handleDelete(deleteConfirm.id)}
+                  onClick={() => handleDelete(deleteConfirm.id || deleteConfirm._id)}
                   className="cursor-pointer flex-1 px-6 py-3.5 border font-bold text-[11px] uppercase tracking-widest bg-red-600 hover:bg-red-700 text-white border-red-600 transition-all"
                 >
                   Delete
